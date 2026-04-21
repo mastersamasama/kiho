@@ -111,7 +111,7 @@ routing:
 
 | ID | Skill | Path | Description |
 |---|---|---|---|
-| `sk-001` | **kiho** | `core/harness/kiho/` | Use this skill whenever the user invokes /kiho or asks kiho to do anything. Single entry point that parses mode flags... |
+| `sk-001` | **kiho** | `kiho/` | Single entry point for kiho's multi-agent orchestration harness. Triggers on /kiho (with or without flags), natural-language "kiho …" / "have kiho …", or PRD file paths. Loads CEO persona, parses mode, runs Ralph loop... |
 | `sk-002` | **kiho-spec** | `core/harness/kiho-spec/` | Harness-enriched kiro spec runner that orchestrates the three-stage spec ritual (requirements, design, tasks) with co... |
 | `sk-004` | **kiho-setup** | `core/harness/kiho-setup/` | Use this skill on first run of kiho or when the user explicitly asks to set up, reinitialize, reset, or repair kiho. ... |
 | `sk-005` | **kiho-init** | `core/harness/kiho-init/` | Use this skill when the user runs /kiho kb-init to bootstrap a knowledge base from a PRD or an existing codebase. The... |

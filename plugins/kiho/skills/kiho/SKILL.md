@@ -1,10 +1,10 @@
 ---
 name: kiho
-description: Use this skill whenever the user invokes /kiho or asks kiho to do anything. Single entry point that parses mode flags, loads the CEO persona, spawns departments, runs the Ralph autonomous loop, delegates tasks, coordinates committees, integrates decisions into the KB, and evolves skills over time. Dispatches across all modes — /kiho feature, /kiho --bugfix, /kiho --refactor, /kiho --vibe, /kiho --debate, /kiho --resume, /kiho kb-init, /kiho evolve — plus implicit mode detection when the user passes a PRD file path or a plain description. Also triggers when the user says "kiho" or "have kiho" followed by any task (e.g., "have kiho build the auth flow"). Invoke this skill for multi-agent orchestration, cross-team planning, PRD ingestion, committee debate, agent recruitment, knowledge-base bootstrap, or skill evolution — even when the user does not explicitly say "kiho".
+description: Single entry point for kiho's multi-agent orchestration harness. Trigger this whenever the user types /kiho (with or without flags — /kiho feature, --bugfix, --refactor, --vibe, --debate, --resume, kb-init, evolve), says "kiho …" or "have kiho …" in natural language, or passes a PRD file path expecting it to be ingested. Also trigger when the user asks for multi-agent orchestration, cross-team planning, committee debate, agent recruitment, knowledge-base bootstrap, or skill evolution — even without saying "kiho" explicitly. The skill loads a CEO persona in the main conversation, parses the mode, and runs a Ralph-style autonomous loop that delegates to departments, committees, and vendored skills until the plan is empty, the iteration budget is exhausted, or a user answer is required.
 argument-hint: "<mode-or-description-or-prd-path>"
 metadata:
   trust-tier: T3
-  version: 2.1.0
+  version: 2.2.0
   lifecycle: active
   kiho:
     capability: orchestrate
@@ -12,22 +12,156 @@ metadata:
     data_classes: ["kiho-config", "ceo-ledger", "continuity", "plan"]
 ---
 
-# kiho — entry-point skill
+# kiho — single entry
 
-This file is the discoverable entry point that Claude Code's plugin harness finds at the conventional `skills/kiho/SKILL.md` path. The authoritative harness instructions (Ralph loop, CEO persona loading, mode dispatch, department spawning, committee coordination, KB integration, skill evolution) live at the canonical kiho-harness SKILL.md below.
+`/kiho` activates a **main-conversation CEO agent** that orchestrates departments (PM, Engineering, HR, plus others recruited on demand), runs committees for non-trivial decisions, maintains a project + company knowledge base, and evolves skills over time. The CEO is the only agent authorized to call `AskUserQuestion`; every sub-agent returns structured output and the CEO decides when to escalate.
 
-## What to do when this skill triggers
+This skill does not do the requested work itself. It loads the persona, parses the mode, and hands off to the CEO's Ralph loop. If you are tempted to skip that handoff and "just answer," read `references/rejected-alternatives.md` §A1 first.
 
-Read the canonical harness SKILL.md and follow it to the letter. Do not perform the requested work inline — route everything through the CEO persona it instructs you to load.
+## When to invoke
 
-**Canonical SKILL.md:** `${CLAUDE_PLUGIN_ROOT}/skills/core/harness/kiho/SKILL.md`
+Invoke when any of the following holds:
 
-Use the Read tool on that path, then execute its instructions using the user's argument (the full text after `/kiho`) as the mode / description / PRD-path input.
+- User types `/kiho <anything>` — with or without mode flags
+- User says "kiho …" or "have kiho …" in plain text
+- User passes a PRD file path expecting kiho to ingest it
+- User asks for multi-agent orchestration, cross-team planning, committee debate, agent recruitment, KB bootstrap, or skill evolution
 
-## Why this shim exists
+Do **not** invoke when:
 
-The kiho plugin organizes its internal skill catalog hierarchically under `skills/{_meta,core,kb,memory,engineering}/…/<skill>/SKILL.md` to keep the authoring taxonomy (capability verb × topic × domain) clean. Claude Code's plugin skill auto-discovery, however, looks for skills at the flat `skills/<name>/SKILL.md` path and does not recurse into nested category directories. This file exists solely to bridge that gap for the single user-facing entry point. All other kiho skills remain internal — the CEO persona loads them by file path from the canonical tree, so they do not need to appear in the harness's available-skills list.
+- A spawned sub-agent returns structured output — that routes back to the CEO, not through this skill again
+- The user asks an unrelated single-file question — answer directly without loading the harness
 
-## Do not modify the harness here
+## Non-goals
 
-If you need to change kiho's harness behavior (Ralph loop semantics, mode flags, dispatch rules, CEO bootstrapping), edit the canonical file at `skills/core/harness/kiho/SKILL.md` — not this shim. This shim's frontmatter description **must** stay in sync with the canonical's description so triggering remains consistent; everything else delegates.
+These define the skill by what it refuses to do:
+
+- **Not an inline worker.** This skill never executes the requested task itself. Doing so would bypass committees, RACI, and KB updates — every kiho value proposition assumes delegation.
+- **Not a sub-agent entry point.** Only the main conversation invokes `/kiho`. A sub-agent that re-invokes this skill creates a loop and breaks the depth cap.
+- **Not a multi-entry harness.** `/kiho` is the sole public surface. Mode-specific commands (`/kiho-feature`, `/kiho-bugfix`) are explicitly rejected (see `references/rejected-alternatives.md` §A2).
+- **Not a zero-interaction system.** The CEO pauses and calls `AskUserQuestion` when uncertain. The Ralph loop runs until it needs a human, not until every possible path is exhausted.
+- **Not a standalone research tool.** Research is a delegated operation routed through the `research` skill's cascade (KB → web → deepwiki → clone → ask-user). Direct web fetches from this skill are prohibited.
+- **Not a session manager.** Cross-session resumption happens via `/kiho --resume <spec-name>` reading `.kiho/state/` — there is no in-memory session store.
+
+## Startup sequence (hot path)
+
+Run these four steps in order before any delegation. Each step carries its reason so you can judge edge cases instead of following blindly.
+
+1. **Read `${CLAUDE_PLUGIN_ROOT}/skills/core/harness/kiho/config.toml`.** This file holds thresholds (iteration caps, committee budgets), company_root, and migration flags. If `company_root` is empty, invoke the `kiho-setup` skill first and restart this sequence — kiho cannot operate without a company root. Otherwise export `$COMPANY_ROOT` from the value.
+2. **Read `${CLAUDE_PLUGIN_ROOT}/agents/kiho-ceo.md`.** This is the step that switches the main agent into CEO persona, including its pre-loaded skill portfolio and the Ralph loop definition. **Skipping this step is the single most load-bearing MUST NOT in this file** — without the CEO loaded, the loop runs without role discipline, no one owns `AskUserQuestion`, and delegation targets are unresolved.
+3. **Parse `$ARGUMENTS` into `(mode, payload)`.** Use the table in [Mode parsing](#mode-parsing). The parser is deterministic — flag-prefixed inputs bind to a mode directly; bare text becomes `unclassified` and the CEO classifies it internally using `.kiho/state/plan.md` + recent session context.
+4. **Run the CEO's Ralph loop.** The loop body, escalation table, and 18-step INITIALIZE live in `agents/kiho-ceo.md`. Exit conditions are in [Loop discipline](#loop-discipline) below.
+
+`${CLAUDE_PLUGIN_ROOT}` is set by Claude Code to the plugin install path. `$COMPANY_ROOT` is sourced from `config.toml` and is first populated by `kiho-setup` on a fresh install.
+
+## Mode parsing
+
+| Input | Mode | Payload |
+|---|---|---|
+| `--bugfix <text>` | bugfix | text |
+| `--refactor <text>` | refactor | text |
+| `--vibe <text>` | vibe | text |
+| `--debate <topic>` | debate | topic |
+| `--resume <name>` | resume | spec name |
+| `feature <text>` | feature | text |
+| `kb-init` or `kb-init <path>` | kb-init | optional PRD path |
+| `evolve` or `evolve <skill>` | evolve | optional skill name; accepts `--audit=<lens>` for a deterministic read-only audit (lens values: `storage-fit` — verifies `metadata.kiho.data_classes:` against `references/data-storage-matrix.md`; see `skills/_meta/evolution-scan/references/storage-audit-lens.md`) |
+| Path to an existing file | feature-from-prd | absolute path |
+| Anything else | unclassified | raw string |
+
+For `unclassified`, the CEO reads `.kiho/state/plan.md` (if present) + last 10 session-context entries, then classifies internally. If still unclear, the CEO calls `AskUserQuestion` (Route C below).
+
+See `references/worked-examples.md` for the four canonical dispatch shapes: implicit feature from plain description, PRD path, vibe, and resume.
+
+## Agent assignments by mode
+
+Each mode recruits a canonical delegation shape. Depth cap 3 (CEO → Dept → Team/IC) and fanout cap 5 apply to every row.
+
+| Mode | Primary delegation | Supporting | Recruited on demand |
+|---|---|---|---|
+| feature / feature-from-prd | CEO → PM → Engineering | kb-manager (INTEGRATE) | design-agent (researchable gap), committee (non-trivial decisions) |
+| bugfix | CEO → Engineering | kb-manager | — |
+| refactor | CEO → Engineering | kb-manager | — |
+| vibe | CEO → IC | — | — |
+| debate | CEO → committee | kb-manager (INTEGRATE) | — |
+| evolve | CEO → kb-manager | — | design-agent, skill-derive |
+| kb-init | CEO → kb-manager | Engineering (code-base scan) | — |
+| resume | (reloads prior delegation from `.kiho/state/<spec>/`) | kb-manager | — |
+
+## Failure playbook
+
+Failures during startup or the Ralph loop must route through the decision below rather than raising raw errors to the user. Silent retry is forbidden — every retry is recorded in the CEO ledger at `.kiho/state/ceo-ledger.jsonl`.
+
+**Severity:** error (blocks the `/kiho` turn from completing). **Taxonomy:** config | transient | resource | protocol.
+
+| Trigger | Route | Action |
+|---|---|---|
+| `config.toml` missing, OR present with empty `company_root` | **A — setup** | Log the failure, invoke `kiho-setup`, retry from startup step 1 |
+| `agents/kiho-ceo.md` missing | **B — reinstall** | Abort with `status: ceo_persona_missing`; user reinstalls the plugin (no automated recovery) |
+| `$ARGUMENTS` empty, OR mode=`unclassified` with empty `plan.md` | **C — ask user** | CEO calls `AskUserQuestion` with mode/description options, ends the turn; the user's reply dispatches on the next invocation |
+| `max_ralph_iterations` exceeded, OR `stuck_timeout_min` elapsed with no progress | **D — checkpoint** | Write plan + iteration count + last step to `.kiho/state/<spec>/partial.md`, emit structured summary with `status: max_iterations` or `status: user_question`, end turn; user resumes via `/kiho --resume <spec>` |
+| Sub-agent returned malformed output | **E — retry-then-escalate** | Log full malformed body; retry the sub-agent **once** with a schema reminder; on second failure, escalate via `AskUserQuestion` attaching both responses |
+
+Routes A–E are the only exits from failure.
+
+## Loop discipline
+
+The CEO runs inside a single main-agent turn. It must not stop until one of:
+
+- `plan.md` Pending list is empty **AND** `completion.md` criteria are met → `status: complete`
+- A user answer is required — CEO calls `AskUserQuestion` → `status: user_question`
+- `max_ralph_iterations` from `config.toml` is exceeded → `status: max_iterations`, checkpoint via Route D
+
+Each Ralph iteration runs a mid-loop `INTEGRATE` step that routes decisions with confidence ≥ 0.90 through `kiho-kb-manager` via `kb-add`. The KB stays current throughout the session.
+
+## Invariants
+
+The following are load-bearing MUSTs. Each has a reason attached so you can distinguish a legitimate exception from drift.
+
+- **Delegate every request.** Inline execution bypasses RACI, committees, and KB updates — the core value proposition. Vibe mode still routes through the CEO; it just skips spec creation and delegates directly to an IC.
+- **Route every KB write through `kiho-kb-manager`.** Direct writes to `.kiho/kb/wiki/` corrupt the Karpathy-wiki invariants (root files, tier indexes) because the kb-manager is the only component that runs the post-write lint/promote pipeline.
+- **Respect depth cap 3 (CEO → Dept → Team/IC) and fanout cap 5.** These are empirical ceilings — deeper stacks lose coherence, wider fanouts exceed attention budget. See `references/grounding.md` §"Depth cap 3 + fanout cap 5".
+- **Use the research cascade** (KB → web → deepwiki → clone → ask-user) via the `research` skill. Direct `WebFetch` skips trusted-source registry promotion and corrupts KB consistency.
+- **End the turn with a structured summary** (shape below) when the loop exits. Downstream tooling (`/kiho --resume`, IDE extensions, telemetry rollup) consumes the envelope to know what changed.
+
+### Anti-patterns specific to this entry skill
+
+- **Do not invoke `/kiho` from a sub-agent.** Escalations route back to the main-conversation CEO via `escalate_to_user` bubble-up, not by re-entering the skill.
+- **Do not create new entry-point slash commands.** The 1%/8k-char skill-description budget is paid once; adding `/kiho-feature`, `/kiho-bugfix`, etc. blows that ceiling by the second addition (see `references/rejected-alternatives.md` §A2).
+- **Do not use vibe mode for complex features.** Vibe skips spec creation and committee review. Reserve it for single-file tasks under an hour.
+
+## Response shape
+
+When a `/kiho` turn ends, the main agent returns a structured summary. `/kiho --resume`, telemetry rollup, and IDE extensions all consume this shape.
+
+```json
+{
+  "status": "complete | user_question | max_iterations | error",
+  "mode": "feature | bugfix | refactor | vibe | debate | resume | kb-init | evolve | feature-from-prd | unclassified",
+  "spec_name": "<slug or null>",
+  "iterations_run": 7,
+  "plan_summary": "3 tasks done, 1 pending user decision",
+  "kb_updates": 2,
+  "agents_spawned": ["pm", "engineering", "kb-manager"],
+  "committees_convened": 0,
+  "escalations": [{"type": "user_question", "prompt": "..."}],
+  "next_action": "User reviews KB changes; re-invoke /kiho --resume <spec-name> to continue"
+}
+```
+
+The `status` field drives downstream behavior:
+
+- `complete` — plan empty, completion criteria met; no follow-up needed
+- `user_question` — `AskUserQuestion` was called mid-loop; the user's next message resumes the loop
+- `max_iterations` — Ralph loop hit its budget; partial summary in `.kiho/state/`; resume via `/kiho --resume <spec-name>`
+- `error` — unrecoverable failure routed through the failure playbook
+
+## Deep references
+
+These files are not on the hot path. Read them when the situation calls for it.
+
+- `references/worked-examples.md` — canonical dispatch envelopes for implicit feature, PRD path, vibe, and resume. Read when the mode-parsing table leaves a shape ambiguous.
+- `references/rejected-alternatives.md` — A1–A5, the designs that were evaluated and rejected (inline execution, mode-per-command, flagless auto-classification, CEO-in-subagent, two-file split harness). Read before proposing a redesign.
+- `references/grounding.md` — the five source citations underwriting the design (kubectl single-entry, Ralph loop discipline, main-conversation-only AskUserQuestion, generator/evaluator separation, empirical depth/fanout caps). Read when defending a rule in committee.
+
+The Ralph loop itself, the INITIALIZE checklist, the DONE checklist, and the escalation decision table all live in `agents/kiho-ceo.md` — that file is loaded at startup step 2, so those details do not need to be reproduced here.

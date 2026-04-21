@@ -1,0 +1,216 @@
+# talent-acquisition.toml — kiho v5.21+ cycle template
+#
+# The most complex production lifecycle. Models the full novel-domain hiring
+# pipeline: discover the domain, decide on tools, get user confirmation,
+# deeply research the chosen tool, synthesize agent skills, recruit candidates,
+# onboard the winner, monitor adoption.
+#
+# Demonstrates: __ceo_ask_user__, multi-skill composition, page budget for crawl,
+# nested cycle (recruit) coordination via index, transition to monitor phase.
+
+[meta]
+template_id = "talent-acquisition"
+version = "1.0.0"
+description = "End-to-end novel-domain agent acquisition: discover → decide → confirm → research → synthesize → recruit → onboard → monitor adoption."
+core_abilities_used = ["research", "decide", "build", "deploy", "monitor"]
+inherits_from = ""
+ceo_visible = true
+
+[parameters]
+required = ["domain", "requestor"]
+optional = { tier = "string", budget_iters_override = "int", initial_seed_urls = "list[string]" }
+
+[index_schema]
+discovery = { tools_landscape_ref = "string", candidates = "list[string]" }
+decision = { committee_id = "string", recommended_tool = "string", recommendation_rationale = "string", user_confirmed = "bool", user_chosen_tool = "string" }
+research = { skeleton_ref = "string", pages_crawled = "int", status = "enum[in_progress,exhausted,budget_hit]", auth_required = "bool" }
+synthesis = { extracted_skills = "list[string]", domain_spec_ref = "string" }
+recruit = { recruit_cycle_id = "string", winner = "string" }
+onboard = { status = "enum[not_started,in_progress,complete]", onboarding_note_ref = "string" }
+adoption = { check_scheduled_at_iters = "list[int]", first_check_done = "bool" }
+
+# === Phase 1: discovery ===
+[[phases]]
+id = "discovery"
+core_ability = "research"
+entry_skill = "research"
+entry_args_template = """
+{
+  "op": "kb-search-then-web-cascade",
+  "query": "{params.domain} tools landscape — primary SDKs, official docs, comparative analysis",
+  "max_steps": 5
+}
+"""
+output_to_index_path = "discovery"
+success_condition = "len(index.discovery.candidates) >= 2"
+on_success = "decision"
+on_failure = "blocked"
+budget_iters = 5
+required_role = "kiho-researcher"
+
+# === Phase 2: decision ===
+[[phases]]
+id = "decision"
+core_ability = "decide"
+entry_skill = "committee"
+entry_args_template = """
+{
+  "charter": "Choose the primary SDK/tool for {params.domain} work from candidates surfaced by discovery: {index.discovery.candidates}",
+  "participants": ["kiho-researcher", "kiho-eng-lead", "kiho-auditor"],
+  "max_rounds": 3,
+  "evidence_refs": ["{index.discovery.tools_landscape_ref}"]
+}
+"""
+output_to_index_path = "decision"
+success_condition = "is_set(index.decision.recommended_tool) and index.decision.recommended_tool != ''"
+on_success = "user-confirm"
+on_failure = "blocked"
+budget_iters = 3
+required_role = "kiho-eng-lead"
+
+# === Phase 3: user-confirm (CEO-only AskUserQuestion) ===
+[[phases]]
+id = "user-confirm"
+core_ability = "decide"
+entry_skill = "__ceo_ask_user__"
+entry_args_template = """
+{
+  "question": "Committee recommends '{index.decision.recommended_tool}' for {params.domain} based on: {index.decision.recommendation_rationale}. Confirm or override?",
+  "options": [
+    {"label": "Confirm — proceed with {index.decision.recommended_tool}", "value": "confirm"},
+    {"label": "Override — choose different tool", "value": "override"},
+    {"label": "Defer — close cycle, reopen later", "value": "defer"}
+  ]
+}
+"""
+output_to_index_path = "decision"
+success_condition = "index.decision.user_confirmed == true and is_set(index.decision.user_chosen_tool)"
+on_success = "research-deep"
+on_failure = "closed-failure"
+budget_iters = 2
+
+# === Phase 4: research-deep ===
+[[phases]]
+id = "research-deep"
+core_ability = "research"
+entry_skill = "research-deep"
+entry_args_template = """
+{
+  "topic": "{index.decision.user_chosen_tool} comprehensive integration guide",
+  "seed_urls": "{params.initial_seed_urls}",
+  "role_context": "Build agent capable of using {index.decision.user_chosen_tool} for {params.domain}",
+  "budget_pages": 50,
+  "budget_depth": 3,
+  "novelty_window": 3,
+  "auth_mode": "ask"
+}
+"""
+output_to_index_path = "research"
+output_pages = 50
+success_condition = "index.research.status == 'exhausted' or index.research.status == 'budget_hit'"
+on_success = "synthesis"
+on_failure = "blocked"
+budget_iters = 8
+required_role = "kiho-researcher"
+
+# === Phase 5: synthesis ===
+[[phases]]
+id = "synthesis"
+core_ability = "build"
+entry_skill = "skill-learn"
+entry_args_template = """
+{
+  "op": "synthesize",
+  "skeleton_ref": "{index.research.skeleton_ref}",
+  "domain": "{params.domain}",
+  "tool": "{index.decision.user_chosen_tool}"
+}
+"""
+output_to_index_path = "synthesis"
+success_condition = "len(index.synthesis.extracted_skills) >= 1 and is_set(index.synthesis.domain_spec_ref)"
+on_success = "recruit"
+on_failure = "blocked"
+budget_iters = 3
+required_role = "kiho-eng-lead"
+
+# === Phase 6: recruit ===
+[[phases]]
+id = "recruit"
+core_ability = "build"
+entry_skill = "recruit"
+entry_args_template = """
+{
+  "department": "engineering",
+  "role": "Specialist for {params.domain} using {index.decision.user_chosen_tool}",
+  "headcount": 1,
+  "tier": "{params.tier}",
+  "domain_spec_ref": "{index.synthesis.domain_spec_ref}",
+  "required_skills": "{index.synthesis.extracted_skills}"
+}
+"""
+output_to_index_path = "recruit"
+success_condition = "is_set(index.recruit.winner) and index.recruit.winner != ''"
+on_success = "onboard"
+on_failure = "blocked"
+budget_iters = 5
+required_role = "kiho-recruiter"
+
+# === Phase 7: onboard ===
+[[phases]]
+id = "onboard"
+core_ability = "build"
+entry_skill = "onboard"
+entry_args_template = """
+{
+  "agent_id": "{index.recruit.winner}",
+  "ramp_iterations": 3,
+  "first_90_day_brief": true
+}
+"""
+output_to_index_path = "onboard"
+success_condition = "index.onboard.status == 'complete' and is_set(index.onboard.onboarding_note_ref)"
+on_success = "adoption-monitor"
+on_failure = "blocked"
+budget_iters = 4
+required_role = "kiho-recruiter"
+
+# === Phase 8: adoption-monitor ===
+[[phases]]
+id = "adoption-monitor"
+core_ability = "monitor"
+entry_skill = "skill-adoption-check"
+entry_args_template = """
+{
+  "scope": "agent:{index.recruit.winner}",
+  "markers": [30, 60, 90],
+  "queue_first_at_iters": 30
+}
+"""
+output_to_index_path = "adoption"
+success_condition = "index.adoption.first_check_done == true"
+on_success = "closed-success"
+on_failure = "closed-success"
+budget_iters = 2
+required_role = "kiho-perf-reviewer"
+
+[budget]
+max_iters = 30
+max_wall_clock_min = 90
+max_pages = 50
+escalate_on_blocked_iters = 3
+
+[lifecycle_hooks]
+on_open = [
+  "memory-write type=todo agent_id=ceo-01 importance=7 content='Talent acquisition cycle {cycle_id} opened for domain {params.domain}'"
+]
+on_close_success = [
+  "memory-write type=lesson agent_id=ceo-01 importance=8 content='Talent cycle {cycle_id} succeeded; winner={index.recruit.winner}; tool={index.decision.user_chosen_tool}; pages={index.research.pages_crawled}'",
+  "kb-add page_type=talent-acquisition-completion ref={cycle_id}",
+  "memo-send to=ceo-01 severity=fyi subject='Talent cycle {cycle_id} closed-success'"
+]
+on_close_failure = [
+  "memory-write type=lesson agent_id=ceo-01 importance=8 content='Talent cycle {cycle_id} failed at phase {meta.phase}; rationale: investigate via cycle_replay'",
+  "memo-send to=ceo-01 severity=action subject='Talent cycle {cycle_id} closed-failure'"
+]
+on_pause = []
+on_resume = []

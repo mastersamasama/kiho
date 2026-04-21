@@ -1,0 +1,146 @@
+---
+name: agent-promote
+description: Use this skill when HR-lead or CEO needs to act on an agent's career trajectory — promote an IC to dept lead, demote a lead to IC, cross-train an agent into an adjacent domain, descope an overloaded agent, or merge two underutilized agents into one. Single unified entry point with an action field rather than five separate skills. Tier changes that cross the depth-cap hierarchy (IC ↔ lead) require a committee gate before the skill proceeds; lateral moves do not. Writes the progression audit trail to Tier-2 JSONL and mutates the soul via soul-apply-override when red-line adjustments are needed. Respects the user-accept gate for any soul-mutating promotion.
+argument-hint: "agent_id=<id> action=<promote|demote|cross_train|descope|merge>"
+metadata:
+  trust-tier: T2
+  kiho:
+    capability: update
+    topic_tags: [lifecycle, governance]
+    data_classes: ["agent-md", "agent-souls", "capability-matrix", "soul-overrides", "org-registry"]
+---
+# agent-promote
+
+One skill, five actions, one audit trail. Career lifecycle events for kiho agents are surface-different but structurally identical: they load the current soul and capability matrix, optionally convene a committee, mutate state (soul and/or org-registry), and emit an audit row. Splitting that into five skills duplicated the machinery five times and drifted. This is the single entry point.
+
+## Why a unified skill
+
+The five actions (`promote | demote | cross_train | descope | merge`) share a fixed bones: evidence → committee-gate-if-crossing-depth-cap → soul-apply-override-if-mutating → audit-JSONL → org-sync → memo-fanout. What differs is the payload shape (merge takes two agents, promote takes a new tier, etc.) and the semantic effect on the soul. One skill, one action field, one audit trail that downstream readers (capability-matrix, retrospective, user-facing career timelines) can grep without joining five streams.
+
+## Inputs
+
+```
+PAYLOAD:
+  agent_id: <id>                       # required — the subject
+  action: promote | demote | cross_train | descope | merge   # required
+  from_tier: <IC|lead>                 # required for promote/demote; optional otherwise
+  to_tier: <IC|lead>                   # required for promote/demote
+  evidence_refs: [<ref>, ...]          # required — perf rows, retro mentions, 1:1 refs
+  new_responsibilities: [<bullet>, ...] # required for promote/cross_train/merge
+  dropped_responsibilities: [<bullet>] # required for demote/descope/merge
+  merge_with_agent: <id>               # required for merge; forbidden otherwise
+  effective_iteration: <id>            # optional — defaults to next ralph iteration
+  requester: <agent_id>                # required — hr-lead-01 or ceo-01
+```
+
+## Procedure
+
+1. **Load current state.** Pull the subject's soul (`agents/<agent_id>.md`) and their capability-matrix row (`.kiho/state/capability-matrix.md`). For `merge`, load both souls. Reject if the subject agent doesn't exist, or for `merge` if `merge_with_agent` is in a different department (use a prior `cross_train` to bridge first).
+
+2. **Validate evidence.** `evidence_refs` must be non-empty and each ref must resolve via `storage-broker` op=`read`. No evidence = no progression; career events are not vibes.
+
+3. **Depth-cap committee gate.** If the action crosses the IC ↔ lead boundary (`action in {promote, demote}` and `from_tier != to_tier`) or is a `merge` (merges always change the org shape), convene a committee via `committee-convene`:
+   ```
+   topic: progression for <agent_id>, action=<action>
+   quorum: ceo-01 + hr-lead-01 + dept-lead-for(agent_id)
+   close: unanimous
+   attach: soul + capability-matrix row + evidence_refs
+   ```
+   If the committee returns non-unanimous within 3 rounds, return `status: rejected reason=committee_non_unanimous` with the dissent. Lateral actions (`cross_train`, `descope`, non-tier-crossing `promote`) skip this step.
+
+4. **Write the progression row.** Call `storage-broker` op=`put`:
+   ```
+   namespace: state/hr/progression
+   kind: progression
+   access_pattern: append-only
+   durability: company
+   human_legible: false
+   body:
+     agent_id: <id>
+     action: <action>
+     from_tier: <t>
+     to_tier: <t>
+     evidence_refs: [...]
+     new_responsibilities: [...]
+     dropped_responsibilities: [...]
+     merge_with_agent: <id-or-null>
+     committee_ref: <ref-or-null>
+     requester: <agent_id>
+     effective_iteration: <id>
+     ts: <iso>
+   ```
+
+5. **Soul mutation with user-accept.** If the action requires a soul change (`promote`, `demote`, `cross_train`, `merge`, any `descope` that drops a charter item), call `soul-apply-override`:
+   - `promote`: add responsibilities + tier line.
+   - `demote`: remove lead-only responsibilities, add "IC under <new-lead>".
+   - `cross_train`: add domain to `skills:` frontmatter and soul's `## Scope`.
+   - `descope`: remove the dropped responsibilities.
+   - `merge`: compose both souls into the survivor, archive the absorbed soul's file into `.kiho/agents/<absorbed>/archive/soul-at-merge.md`.
+   `soul-apply-override` enforces the user-accept gate — per its own contract, the CEO funnels the diff to the user and the user per-field accepts. This skill does not bypass that. If the user rejects, return `status: rejected reason=user_reject_soul` and roll back the progression row (write a matching `kind: progression-rollback` row — never mutate prior JSONL).
+
+6. **Org-sync.** Trigger `org-sync` to regenerate `.kiho/state/org-registry.md` and `.kiho/state/capability-matrix.md` from current souls. Without this step the skill's effect is invisible to every routing decision downstream.
+
+7. **Fan-out memos.** `memo-send` severity=`action` to:
+   - `ceo-01` (always — career events are CEO-visible).
+   - The subject agent (the agent whose life just changed gets told first-class, not via digest).
+   - The subject's old lead (if the lead changed).
+   - The subject's new lead (if the lead changed).
+   - For `merge`: both agents + both old leads.
+   Each memo carries the progression row ref and the soul diff ref.
+
+8. **Return the receipt.** Shape below.
+
+## Action semantics
+
+- **promote**: agent takes on broader scope. Within-tier promote (e.g., senior IC) is lateral; cross-tier promote (IC → lead) is the committee-gated path.
+- **demote**: scope shrinks. Committee-gated when crossing tier. Not punitive by default — it's the recovery path when a lead wants to return to IC work.
+- **cross_train**: add a domain to the agent's capability matrix. No tier change; no committee. The soul gets a new skill-portfolio line and a scope addendum.
+- **descope**: reduce load on an overloaded agent by dropping responsibilities without demoting. Capability matrix entries for dropped domains go to proficiency 0 (retained for history, not routed to).
+- **merge**: consolidate two underutilized agents into one. Always committee-gated. The survivor's soul absorbs the absorbed agent's scope; the absorbed soul is archived, not deleted — the audit trail must still resolve historical references.
+
+## Response shape
+
+```markdown
+## Receipt <REQUEST_ID>
+OPERATION: agent-promote
+STATUS: ok | rejected | error
+AGENT_ID: <id>
+ACTION: <action>
+FROM_TIER: <t>
+TO_TIER: <t>
+PROGRESSION_REF: jsonl://state/hr/progression#L<n>
+COMMITTEE_REF: <ref-or-null>
+SOUL_OVERRIDE_REF: <ref-or-null>
+ORG_SYNC_REF: <ref>
+MEMOS_SENT:
+  - to: <agent>
+    memo_ref: memo://inbox/<agent>/<id>
+REJECTION_REASON: <optional — committee_non_unanimous | user_reject_soul | missing_evidence>
+NOTES: <optional>
+```
+
+## Invariants
+
+- **Depth-cap crosses require committee.** Not configurable. IC ↔ lead is the only hierarchy kiho has; changing it unilaterally would breach the depth-cap 3 invariant by surprise.
+- **Soul mutations need user-accept.** Inherited from `soul-apply-override` — this skill cannot bypass that gate even when the CEO is the requester.
+- **Append-only progression.** Never edit a prior progression row. Reverse an action by emitting the opposite action, not by rewriting history.
+- **No `AskUserQuestion` direct.** If user input is needed, return `status: escalate_to_user`; the CEO's Ralph loop does the asking.
+- **Evidence non-optional.** Calls with empty `evidence_refs` are rejected at step 2 regardless of who the requester is.
+
+## Non-Goals
+
+- Not for hiring. New agents are spun up via `recruit`; this skill acts on agents that already exist.
+- Not for firing. Agent retirement goes through `skill-deprecate`-analogue for agents (the agent-retire path); this skill never deletes souls.
+- Not a compensation model. kiho agents don't have salaries; "promotion" is scope + recognition, not pay.
+- Not a skill-granting skill. Cross-train adds a domain, but the agent still has to run `skill-learn` to actually become proficient.
+
+## Grounding
+
+- `references/storage-architecture.md` — Tier-2 append-only discipline for progression JSONL.
+- `references/react-storage-doctrine.md` — storage-broker mediation.
+- `skills/core/storage/storage-broker/SKILL.md` — put op used in step 4.
+- `skills/_meta/soul-apply-override/SKILL.md` — soul mutation contract and user-accept gate in step 5.
+- `references/soul-architecture.md` — what fields in the soul this skill is allowed to touch.
+- `references/committee-rules.md` — unanimous close used at step 3.
+- `references/org-tracking-protocol.md` — org-sync invariants and capability-matrix schema.
+- `references/raci-assignment-protocol.md` — downstream readers of the progression stream.

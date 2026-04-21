@@ -1,0 +1,46 @@
+{
+  "schema_version": "1",
+  "project": "{{project_slug}}",
+  "created_at": "{{iso_timestamp}}",
+  "ceo": {
+    "agent_id": "ceo-01",
+    "definition": "agents/kiho-ceo.md",
+    "memory_scope": "global",
+    "skill_tiers": ["plugin", "company", "project"]
+  },
+  "departments": [
+    {
+      "id": "pm",
+      "name": "Product Management",
+      "leader_agent_id": "pm-lead-01",
+      "definition": "agents/kiho-pm-lead.md",
+      "teams": [],
+      "direct_members": [],
+      "skill_tiers_allowed": ["plugin", "company", "project"]
+    },
+    {
+      "id": "eng",
+      "name": "Engineering",
+      "leader_agent_id": "eng-lead-01",
+      "definition": "agents/kiho-eng-lead.md",
+      "teams": [],
+      "direct_members": [],
+      "skill_tiers_allowed": ["plugin", "company", "project"]
+    },
+    {
+      "id": "hr",
+      "name": "Human Resources",
+      "leader_agent_id": "hr-lead-01",
+      "definition": "agents/kiho-hr-lead.md",
+      "teams": [],
+      "direct_members": [],
+      "skill_tiers_allowed": ["plugin", "company", "project"]
+    }
+  ],
+  "meta": {
+    "depth_cap": 3,
+    "fanout_cap": 5,
+    "last_modified": "{{iso_timestamp}}",
+    "notes": "Default 3-department bootstrap. kb-manager lives at the system level (agents/kiho-kb-manager.md) and is not listed as a department; it is a shared service used by all departments."
+  }
+}

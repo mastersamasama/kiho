@@ -1,0 +1,128 @@
+# kb-bootstrap.toml — kiho v5.21+ cycle template
+#
+# Replaces the hardcoded kiho-init flow. Bootstraps a fresh project KB from a PRD
+# or codebase scan via research-cascade + wiki-draft + lint + promote.
+
+[meta]
+template_id = "kb-bootstrap"
+version = "1.0.0"
+description = "Bootstrap a project KB from a PRD or codebase scan: scope → research-cascade → wiki-draft → lint → promote."
+core_abilities_used = ["research", "build", "validate", "deploy"]
+inherits_from = ""
+ceo_visible = true
+
+[parameters]
+required = ["source_kind", "source_ref"]
+optional = { initial_topics = "list[string]" }
+
+[index_schema]
+scope = { topics_identified = "list[string]", entities_identified = "list[string]" }
+research_cascade = { sources_collected = "int", raw_dir = "string" }
+wiki_draft = { drafts_count = "int", drafts_dir = "string" }
+lint = { passed = "bool", issues_count = "int" }
+promote = { promoted_count = "int", indexes_rebuilt = "bool" }
+
+[[phases]]
+id = "scope"
+core_ability = "research"
+entry_skill = "research"
+entry_args_template = """
+{
+  "op": "kb-search-then-cascade",
+  "query": "{params.source_ref} key concepts and entities",
+  "extract_topics": true
+}
+"""
+output_to_index_path = "scope"
+success_condition = "len(index.scope.topics_identified) >= 1"
+on_success = "research-cascade"
+on_failure = "blocked"
+budget_iters = 3
+required_role = "kiho-researcher"
+
+[[phases]]
+id = "research-cascade"
+core_ability = "research"
+entry_skill = "kiho-kb-manager:kb-ingest-raw"
+entry_args_template = """
+{
+  "topics": "{index.scope.topics_identified}",
+  "source_kind": "{params.source_kind}",
+  "source_ref": "{params.source_ref}"
+}
+"""
+output_to_index_path = "research_cascade"
+output_pages = 30
+success_condition = "index.research_cascade.sources_collected >= 1"
+on_success = "wiki-draft"
+on_failure = "blocked"
+budget_iters = 5
+required_role = "kiho-kb-manager"
+
+[[phases]]
+id = "wiki-draft"
+core_ability = "build"
+entry_skill = "kiho-kb-manager:kb-add"
+entry_args_template = """
+{
+  "stage": "draft",
+  "from_raw_dir": "{index.research_cascade.raw_dir}",
+  "topics": "{index.scope.topics_identified}",
+  "entities": "{index.scope.entities_identified}"
+}
+"""
+output_to_index_path = "wiki_draft"
+success_condition = "index.wiki_draft.drafts_count >= 1"
+on_success = "lint"
+on_failure = "blocked"
+budget_iters = 3
+required_role = "kiho-kb-manager"
+
+[[phases]]
+id = "lint"
+core_ability = "validate"
+entry_skill = "kiho-kb-manager:kb-lint"
+entry_args_template = """
+{
+  "drafts_dir": "{index.wiki_draft.drafts_dir}"
+}
+"""
+output_to_index_path = "lint"
+success_condition = "index.lint.passed == true"
+on_success = "promote"
+on_failure = "blocked"
+budget_iters = 2
+
+[[phases]]
+id = "promote"
+core_ability = "deploy"
+entry_skill = "kiho-kb-manager:kb-promote"
+entry_args_template = """
+{
+  "drafts_dir": "{index.wiki_draft.drafts_dir}"
+}
+"""
+output_to_index_path = "promote"
+success_condition = "index.promote.promoted_count >= 1 and index.promote.indexes_rebuilt == true"
+on_success = "closed-success"
+on_failure = "blocked"
+budget_iters = 2
+
+[budget]
+max_iters = 30
+max_wall_clock_min = 120
+max_pages = 30
+escalate_on_blocked_iters = 3
+
+[lifecycle_hooks]
+on_open = [
+  "memory-write type=todo agent_id=ceo-01 importance=6 content='KB bootstrap cycle {cycle_id} from {params.source_kind}: {params.source_ref}'"
+]
+on_close_success = [
+  "memory-write type=lesson agent_id=ceo-01 importance=7 content='KB bootstrap {cycle_id} succeeded; promoted {index.promote.promoted_count} pages'"
+]
+on_close_failure = [
+  "memo-send to=ceo-01 severity=action subject='KB bootstrap {cycle_id} failed'"
+]
+on_pause = []
+on_resume = []

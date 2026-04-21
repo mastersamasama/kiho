@@ -1,0 +1,117 @@
+# kiho plugin — user-editable defaults
+#
+# This file is read at the start of every /kiho invocation. The kiho skill
+# exports these values into the CEO's environment. If a value is missing,
+# kiho-setup prompts the user via AskUserQuestion and writes the answer back.
+#
+# Safe to edit by hand. Regenerable from the template at
+# templates/config.default.toml if deleted.
+#
+# Format: TOML 1.0 (human-writable; stdlib `tomllib` on Python 3.11+, or
+# `import tomli as tomllib` fallback on 3.10). Migrated from config.yaml
+# 2026-04-19 per references/storage-tech-stack.md §1. See
+# references/data-storage-matrix.md §2 (kiho-config row — FIT).
+
+# ---- Required ----
+
+# Where the company-level knowledge base lives. MUST be an absolute path.
+# This path is user-global ("follows the user") and is NOT inside any
+# specific project. Recommended defaults:
+#   Windows: D:/Tools/kiho/
+#   Unix:    ~/kiho/
+# If empty or missing, kiho-setup will ask on first run.
+company_root = ""
+
+# ---- v4 thresholds ----
+
+# Trigger memory-reflect for an agent every N completed tasks.
+reflection_task_interval = 5
+
+# CEO checks org health (recomposition) every N completed tasks.
+recomposition_task_interval = 10
+
+# Trigger reflection when observation importance sum exceeds this.
+importance_threshold = 15
+
+# Minimum capability matrix proficiency for RACI R (Responsible) assignment.
+min_proficiency_for_assignment = 2
+
+# CEO self-reflection cadence (v5). Every N /kiho turns runs CEO memory-reflect.
+# Default 1 = every turn (max drift-detection fidelity).
+ceo_turn_interval = 1
+
+# ---- CEO autonomy thresholds ----
+
+# CEO proceeds autonomously when confidence is >= this for reversible ops.
+autonomy_threshold_reversible = 0.90
+
+# CEO proceeds autonomously when confidence is >= this for irreversible ops,
+# AND the operation class has been user-preapproved.
+autonomy_threshold_irreversible = 0.95
+
+# ---- Committee rules ----
+
+# Maximum rounds a committee may run before escalating to CEO.
+max_committee_rounds = 3
+
+# Aggregate confidence required to close a committee without escalation.
+committee_no_doubt_confidence = 0.90
+
+# ---- Ralph loop safety ----
+
+# Hard cap on Ralph loop iterations per /kiho turn.
+max_ralph_iterations = 200
+
+# Stuck-detection timeout in minutes (no progress in ledger -> ASK_USER).
+stuck_timeout_min = 10
+
+# ---- Organization caps ----
+
+# Hard limit on sub-agent spawn depth (CEO -> Dept -> Team/IC = 3).
+depth_cap = 3
+
+# Hard limit on sibling sub-agents per parent.
+fanout_cap = 5
+
+# ---- Evolution loop ----
+
+# Max iterations for a single /kiho evolve invocation.
+max_evolve_iterations = 20
+
+# Minimum days between auto-deprecation sweeps for a skill
+# (an ACTIVE skill unused for > this AND use_count < 3 is eligible).
+skill_stale_days = 60
+
+# ---- Storage-fit grace window (v5.19+) ----
+#
+# Date v5.19 storage redesign shipped. Used by `storage_fit_scan.py` to
+# auto-compute elapsed_days for the UNDECLARED grace window (60d warn /
+# 180d error). See CHANGELOG.md §"v5.19 concepts" and the "Scope" bullet
+# in references/skill-authoring-standards.md § v5.19 data_classes rule.
+# Override at runtime via `--elapsed-days N`.
+v5_19_ship_date = "2026-04-18"
+
+# ---- Research cascade ----
+
+# Max wall-clock minutes any single research cascade step may consume.
+[research_step_budget_min]
+kb_search = 1
+web = 3
+deepwiki = 2
+clone = 5
+ask_user = 0  # no budget; user-driven
+
+# ---- Budgets per /kiho turn ----
+# These are soft caps. CEO logs when they're exceeded but does not hard-stop
+# unless the max_ralph_iterations cap is also reached.
+[budget_per_turn]
+tokens = 2_000_000
+tool_calls = 500
+wall_clock_min = 120
+
+# ---- Memory decay (per-agent memory, not KB) ----
+[memory_tau_days]
+episodic = 14
+semantic = 180
+procedural = 365
+reflective = 90

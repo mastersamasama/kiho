@@ -1,0 +1,143 @@
+# incident-lifecycle.toml — kiho v5.21+ cycle template
+#
+# The simplest production lifecycle: open → mitigate → postmortem → close.
+# Demonstrates the cycle-runner kernel on a small surface.
+#
+# Companion: references/cycle-architecture.md, skills/_meta/cycle-runner/references/template-dsl.md
+
+[meta]
+template_id = "incident-lifecycle"
+version = "1.0.0"
+description = "Open an incident, capture mitigation, run blameless postmortem, close. For sev1: also schedule retrospective trigger as a follow-on cycle."
+core_abilities_used = ["build", "validate", "communicate", "monitor"]
+inherits_from = ""
+ceo_visible = true
+
+[parameters]
+required = ["severity", "trigger_event"]
+optional = { affected_agents = "list[string]", initial_blast_radius = "string" }
+
+# Per-cycle index.toml schema. cycle-runner initializes these tables on op=open;
+# phase output writes are validated against types here.
+[index_schema]
+incident = { incident_id = "string", incident_md_ref = "string", opened_at = "string", severity = "string" }
+triage = { affected_agents = "list[string]", blast_radius = "string", mitigation_plan = "string" }
+mitigation = { applied_at = "string", actions_taken = "list[string]", confirmed_resolved = "bool" }
+postmortem = { postmortem_md_ref = "string", root_cause = "string", contributing_factors = "list[string]", corrective_actions_count = "int" }
+retrospective = { triggered = "bool", retro_cycle_id = "string" }
+
+# === Phase 1: open ===
+# Atomic skill `incident-open` writes the incident.md file + index entry.
+# After it returns, success_condition checks the index has the artifact ref.
+[[phases]]
+id = "open"
+core_ability = "build"
+entry_skill = "incident-open"
+entry_args_template = """
+{
+  "severity": "{params.severity}",
+  "trigger_event": "{params.trigger_event}",
+  "affected_agents": "{params.affected_agents}"
+}
+"""
+output_to_index_path = "incident"
+success_condition = "is_set(index.incident.incident_id) and index.incident.incident_id != ''"
+on_success = "triage"
+on_failure = "blocked"
+budget_iters = 2
+required_role = "kiho-auditor"
+
+# === Phase 2: triage ===
+# Lightweight: dept lead categorizes blast radius and proposes mitigation plan.
+# Uses department-sync's sub-agent pattern; could also be a memo-send + manual response.
+# For v5.21 first pass we keep this as __ceo_ask_user__ to make the path observable.
+[[phases]]
+id = "triage"
+core_ability = "decide"
+entry_skill = "__ceo_ask_user__"
+entry_args_template = """
+{
+  "question": "Incident {index.incident.incident_id} ({params.severity}). Trigger: {params.trigger_event}. Confirm blast radius and approve mitigation approach.",
+  "options": [
+    {"label": "Localized — apply mitigation inline", "value": "localized"},
+    {"label": "Cross-dept — pause affected work", "value": "cross-dept"},
+    {"label": "Org-wide — emergency protocol", "value": "org-wide"}
+  ]
+}
+"""
+output_to_index_path = "triage"
+success_condition = "is_set(index.triage.blast_radius) and index.triage.blast_radius != ''"
+on_success = "mitigation"
+on_failure = "blocked"
+budget_iters = 3
+
+# === Phase 3: mitigation ===
+# Operator action; cycle-runner waits for confirmation that mitigation applied.
+[[phases]]
+id = "mitigation"
+core_ability = "build"
+entry_skill = "__hook_only__"
+entry_args_template = """
+{}
+"""
+output_to_index_path = "mitigation"
+success_condition = "index.mitigation.confirmed_resolved == true"
+on_success = "postmortem"
+on_failure = "blocked"
+budget_iters = 5
+
+# === Phase 4: postmortem ===
+# Run blameless postmortem skill; validates root_cause via blameless linter.
+[[phases]]
+id = "postmortem"
+core_ability = "build"
+entry_skill = "postmortem"
+entry_args_template = """
+{
+  "incident_id": "{index.incident.incident_id}",
+  "root_cause": "TBD-pending-investigation",
+  "affected_agents": "{params.affected_agents}"
+}
+"""
+output_to_index_path = "postmortem"
+success_condition = "is_set(index.postmortem.postmortem_md_ref) and index.postmortem.corrective_actions_count >= 1"
+on_success = "retrospective-trigger"
+on_failure = "blocked"
+budget_iters = 3
+required_role = "kiho-auditor"
+
+# === Phase 5: retrospective-trigger ===
+# For sev1 only, open a retrospective cycle. For sev2/sev3, no-op.
+[[phases]]
+id = "retrospective-trigger"
+core_ability = "monitor"
+entry_skill = "__hook_only__"
+entry_args_template = """
+{}
+"""
+output_to_index_path = "retrospective"
+success_condition = "params.severity != 'sev1' or index.retrospective.triggered == true"
+on_success = "closed-success"
+on_failure = "closed-success"
+budget_iters = 2
+
+[budget]
+max_iters = 15
+max_wall_clock_min = 90
+max_pages = 0
+escalate_on_blocked_iters = 3
+
+[lifecycle_hooks]
+on_open = [
+  "memory-write type=todo agent_id=ceo-01 importance=8 content='Incident {cycle_id} ({params.severity}) opened: {params.trigger_event}'"
+]
+on_close_success = [
+  "memory-write type=lesson agent_id=ceo-01 importance=8 content='Incident {cycle_id} closed via postmortem {index.postmortem.postmortem_md_ref}; corrective actions: {index.postmortem.corrective_actions_count}'",
+  "memo-send to=ceo-01 severity=fyi subject='Incident {cycle_id} closed'"
+]
+on_close_failure = [
+  "memory-write type=lesson agent_id=ceo-01 importance=9 content='Incident {cycle_id} cycle failed/blocked; manual escalation needed'",
+  "memo-send to=ceo-01 severity=blocker subject='Incident cycle {cycle_id} failed'"
+]
+on_pause = []
+on_resume = []

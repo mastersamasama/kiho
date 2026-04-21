@@ -1,0 +1,6 @@
+{
+  "event": "Stop",
+  "disabled": true,
+  "description": "Optional one-line nudge about kiho availability. Disabled by default — enable in settings if desired.",
+  "prompt": "If the user has not yet used /kiho in this session and their request could benefit from orchestrated multi-agent work, include a brief note: 'kiho available — /kiho to orchestrate, /kiho evolve to tune skills.'"
+}

@@ -1,0 +1,271 @@
+---
+name: memory-reflect
+description: Automated reflection that synthesizes an agent's recent observations into higher-order reflections, detects personality trait drift against the agent's soul, and checks for KB graduation candidates. Triggers after every 5th task completion, when an observation's importance score exceeds 0.90, or on explicit request ("reflect on recent work", "what have I learned", "review my patterns"). Runs as part of the memory subsystem alongside memory-read, memory-write, and memory-consolidate.
+metadata:
+  trust-tier: T2
+  version: 1.1.0
+  lifecycle: active
+  kiho:
+    capability: create
+    topic_tags: [reflection]
+    data_classes: ["reflections", "observations", "soul-overrides"]
+---
+# memory-reflect
+
+Transforms raw observations into reflections and lessons by analyzing patterns across recent agent memory. Detects when an agent's behavior diverges from its declared soul traits and flags high-confidence lessons for KB graduation.
+
+## Contents
+- [Inputs](#inputs)
+- [Trigger conditions](#trigger-conditions)
+- [Reflection procedure](#reflection-procedure)
+- [Trait drift detection](#trait-drift-detection)
+- [KB graduation check](#kb-graduation-check)
+- [Response shape](#response-shape)
+- [Anti-patterns](#anti-patterns)
+
+## Inputs
+
+```
+agent_id: <agent-name or agent-name-instance-id>
+trigger_type: periodic | threshold | explicit
+recent_observations_count: <number of recent observations to analyze, default 20>
+tier: project | company  (default: project)
+```
+
+- `periodic` — triggered automatically after the agent's 5th task completion since the last reflection.
+- `threshold` — triggered when a newly written observation has importance/confidence >= 0.90.
+- `explicit` — triggered by a direct request from the agent, CEO, or department lead.
+
+## Trigger conditions
+
+| Trigger | Condition | Scope |
+|---|---|---|
+| Periodic | Task completion count since last reflection >= 5 | Per agent |
+| Threshold | `memory-write` produces an observation with confidence >= 0.90 | Per entry |
+| Explicit | Agent or lead requests reflection | On demand |
+
+Track the last reflection timestamp in the agent's memory directory:
+
+```
+.kiho/agents/<agent-name>/memory/.last-reflect
+```
+
+This file contains a single ISO timestamp. If absent, treat as "never reflected" and run on next trigger.
+
+## Reflection procedure
+
+### Gather recent observations
+
+Read the agent's `observations.md` file via memory-read. Select the most recent `recent_observations_count` entries (default 20). Also read `reflections.md` to avoid duplicating existing reflections.
+
+### Cluster by theme
+
+Group observations by tag overlap and content similarity. Two observations belong to the same cluster if they share at least one tag or if their content has >30% word overlap (stopwords excluded). Name each cluster by its most frequent tag.
+
+### Synthesize reflections
+
+For each cluster with 2+ observations:
+
+1. Identify the pattern connecting the observations.
+2. Assess confidence: base it on the number of supporting observations and their individual confidence scores. Formula: `cluster_confidence = mean(obs_confidences) * min(cluster_size / 3, 1.0)`.
+3. Draft a reflection entry that states the pattern, cites the supporting observation entry_ids, and describes the implication for future work.
+
+Write each reflection via memory-write with `memory_type=reflection`.
+
+### Promote reflections to lessons
+
+Scan all reflections (existing + newly created) for promotion candidates:
+
+- A reflection qualifies for promotion to lesson if:
+  - confidence >= 0.85
+  - supported by 3+ observations
+  - contains an actionable guideline (not just a description of a pattern)
+
+Write promoted entries via memory-write with `memory_type=lesson`.
+
+### Evaluate trait alignment
+
+Run trait drift detection (see below) against the observations gathered in the first step.
+
+### Check KB graduation
+
+Run KB graduation check (see below) against any lessons with confidence >= 0.95.
+
+### Update reflection timestamp
+
+Write the current ISO timestamp to `.kiho/agents/<agent-name>/memory/.last-reflect`.
+
+## Trait drift detection
+
+Compare the agent's recent behavior against its declared soul traits. This algorithm is detailed in `references/soul-architecture.md` under "Trait drift detection." Summary:
+
+### Behavioral signal extraction
+
+For each of the last 10 task completions, extract signals on a 1-10 scale:
+
+| Trait | Signal source |
+|---|---|
+| Openness | Decision style: 1 = always conventional, 10 = always experimental |
+| Conscientiousness | Output thoroughness: 1 = no tests/docs, 10 = comprehensive coverage |
+| Extraversion | Communication volume: 1 = minimal output, 10 = proactive verbose updates |
+| Agreeableness | Conflict behavior: 1 = challenges everything, 10 = accepts everything |
+| Neuroticism | Escalation pattern: 1 = never escalates, 10 = escalates frequently |
+
+### Drift computation
+
+```
+For each trait:
+  observed_score = mean(last_10_signals)
+  declared_score = agent.soul.personality[trait].score
+  drift = abs(observed_score - declared_score)
+
+  if drift >= 2.0:
+    flag as drift
+    append to agent's trait history
+```
+
+### Drift severity
+
+| Drift magnitude | Action |
+|---|---|
+| < 2.0 | No action |
+| 2.0 - 2.9 | Log to trait history. Informational. |
+| 3.0+ | Flag for CEO/HR review in the response. Include evidence. |
+
+When drift is flagged, include the following in the response:
+
+```markdown
+### Trait drift detected
+
+| Trait | Declared | Observed | Drift | Severity |
+|---|---|---|---|---|
+| Openness | 4 | 7 | 3.0 | review-required |
+
+**Evidence:** observations [mem-eng-01-038, mem-eng-01-041, mem-eng-01-044] show consistent preference for experimental approaches.
+
+**Recommendation:** Update soul (agent evolved) or reinforce original trait (agent drifted).
+```
+
+## KB graduation check
+
+For each lesson with confidence >= 0.95:
+
+1. Call `kb-search` with the lesson content as query.
+2. If a matching KB entry exists (similarity > 0.80), skip — the lesson is already captured.
+3. If no match, mark the lesson as a KB graduation candidate.
+
+Do not auto-graduate. Return the candidate in the response for CEO/lead decision.
+
+```markdown
+### KB graduation candidates
+
+| Entry ID | Content summary | Confidence | Tags |
+|---|---|---|---|
+| mem-eng-01-055 | Redis Cluster requires minimum 6 nodes for HA | 0.96 | infrastructure, redis |
+
+**Action required:** CEO or department lead calls `kb-add` to promote, or dismisses.
+```
+
+## Response shape
+
+```markdown
+## Reflection results for <agent_id>
+
+**Trigger:** <trigger_type>
+**Observations analyzed:** <count>
+**Reflections created:** <count>
+**Lessons promoted:** <count>
+
+### New reflections
+- [mem-eng-01-050] **Caching patterns** (confidence 0.82) — Redis is consistently chosen over Memcached for sessions; 3 observations support this preference.
+
+### Promoted lessons
+- [mem-eng-01-055] **Redis HA requirement** (confidence 0.96) — Production Redis must run in cluster mode with >= 6 nodes.
+
+### Trait drift detected
+(if any — see format above)
+
+### KB graduation candidates
+(if any — see format above)
+
+### Next reflection
+Scheduled after 5 more task completions or when an observation with confidence >= 0.90 is written.
+```
+
+## Anti-patterns
+
+- **Reflecting too often.** Do not reflect after every single task. The 5-task periodic interval exists to accumulate enough observations for meaningful pattern detection. Reflecting on 1-2 observations produces low-confidence noise.
+
+- **Auto-promoting everything.** Not every observation becomes a reflection, and not every reflection becomes a lesson. Maintain quality gates: 2+ observations for reflection, 3+ observations + actionable content for lesson, 0.95+ confidence for KB graduation.
+
+- **Ignoring the soul.** Trait drift detection is not optional. Skip it and the agent's personality silently decays toward generic LLM behavior. Always run drift detection during reflection.
+
+- **Modifying the soul directly.** memory-reflect detects drift and reports it. Only the CEO or HR lead authorizes soul changes via `memory-write type=soul-override`. memory-reflect never writes to the soul section.
+
+- **Reflecting on other agents' memory.** Reflection is self-analysis only. An agent reflects on its own observations. Cross-agent pattern detection is handled by the CEO during recomposition checks.
+
+- **Skipping the KB dedup check.** Always search the KB before flagging a graduation candidate. Duplicate KB entries waste tokens and create conflicting guidance.
+
+## CEO reflection scope
+
+When `agent_id` is `ceo-01` and `trigger_type` is `periodic` or `explicit`, memory-reflect enters CEO-scope pathway. CEO reflection operates on different source data and produces different outputs than IC reflection.
+
+### Inputs (CEO-scope)
+
+```
+agent_id: ceo-01
+trigger_type: periodic | explicit
+ceo_turn_interval: <integer — reflect every N CEO turns, default 1>
+```
+
+### Source data
+
+Instead of `.kiho/agents/ceo-01/memory/observations.md`, CEO reflection reads:
+
+1. `.kiho/state/ceo-ledger.jsonl` — last 200 entries (covers several turns)
+2. `.kiho/state/agent-performance.jsonl` — last 100 entries
+3. `.kiho/state/management-journals/*.md` — all leader journals
+4. `.kiho/agents/ceo-01/memory/observations.md` — CEO's own observations (if any)
+
+### Reflection clustering
+
+Cluster by:
+- **Escalation patterns** — group ASK_USER actions by reason; detect over- or under-escalation
+- **Delegation efficiency** — group DELEGATE actions by target; detect under-utilized or overloaded agents
+- **Consensus patterns** — group committee outcomes by subject; detect recurring dissent topics
+- **Time-to-resolution** — group plan items by category; detect categories with slow throughput
+
+### CEO-specific drift detection
+
+The CEO's soul is in `agents/kiho-ceo.md`. Drift signals:
+
+| CEO trait | Signal |
+|---|---|
+| Openness | Ratio of novel delegation patterns vs. repeat patterns across turns |
+| Conscientiousness | Percentage of turns with complete ledger + CONTINUITY |
+| Extraversion | Average delegation prompt length + average user-facing report length |
+| Agreeableness | Ratio of RECONVENE to PROCEED after committee |
+| Neuroticism | Escalation frequency (ASK_USER per turn) vs. declared threshold |
+
+Drift computation and threshold are identical to IC pathway (drift >= 3.0 triggers soul-override entry).
+
+CEO drift >= 3.0 writes a pending entry via `storage-broker` (sk-040) op=put `namespace="state/agents/ceo-01/soul-overrides"`, `kind="generic"`, payload includes `authorized_by: hr-lead-01` (HR approves CEO soul changes — CEO cannot authorize its own), `status: "pending"`, plus the drift evidence. The pre-v5.20 md queue at `.kiho/agents/ceo-01/memory/soul-overrides.md` is retired in the v5.20 coordinated flip; see `skills/memory/memory-consolidate/SKILL.md` for the shared payload shape.
+
+### CEO reflection outputs
+
+Beyond standard reflection outputs, CEO reflection produces:
+
+- **Organization health report** — consolidated findings across clustering categories
+- **Agent performance flags** — agents with declining success_rate
+- **Delegation imbalance warnings** — over- or under-utilized agents
+- **Soul drift self-report** — CEO's own drift if detected
+- **Escalation pattern adjustment** — if CEO consistently under- or over-escalates per the decision table, propose a threshold adjustment
+
+The organization health report is a mandatory input to the CEO's recomposition check.
+
+### When CEO reflection runs
+
+- **Periodic:** every `ceo_turn_interval` CEO turns (default 1 = every turn). Track last-reflect timestamp in `.kiho/agents/ceo-01/memory/.last-reflect`.
+- **Explicit:** when the user invokes `/kiho reflect` or CEO self-triggers after a high-drift turn.
+
+Do NOT run CEO reflection mid-turn. It runs either at the top of a turn (INITIALIZE) or at the end (before DONE). Running mid-turn would contaminate the ledger-reading with the current in-progress turn's actions.

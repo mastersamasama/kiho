@@ -1,0 +1,27 @@
+# Runtime state — produced by kiho as it operates on a project
+.kiho/
+_meta-runtime/
+
+# Other plugins' runtime state (belongs to whoever authored them, not this repo)
+.oki-team/
+
+# Build artifacts
+build/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

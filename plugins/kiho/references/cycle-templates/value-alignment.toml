@@ -1,0 +1,87 @@
+# value-alignment.toml — kiho v5.21+ cycle template
+#
+# Quarterly cadence (open every 90 days). Aggregates values-flag entries,
+# audits drift patterns, opens committee for re-rank if drift detected.
+
+[meta]
+template_id = "value-alignment"
+version = "1.0.0"
+description = "Quarterly value drift audit: aggregate flags → audit → committee (if drift) → re-rank or reaffirm."
+core_abilities_used = ["monitor", "decide"]
+inherits_from = ""
+ceo_visible = true
+
+[parameters]
+required = []
+optional = { window_days = "int", flag_threshold = "int", spike_threshold_pct = "int" }
+
+[index_schema]
+audit = { audit_id = "string", flags_aggregated = "int", values_flagged = "list[string]", drift_detected = "bool" }
+decide = { committee_id = "string", action = "string" }
+apply = { reaffirmed_values = "list[string]", re_ranked = "bool" }
+
+[[phases]]
+id = "audit"
+core_ability = "monitor"
+entry_skill = "values-alignment-audit"
+entry_args_template = """
+{
+  "window_days": 90
+}
+"""
+output_to_index_path = "audit"
+success_condition = "is_set(index.audit.audit_id)"
+on_success = "decide"
+on_failure = "blocked"
+budget_iters = 2
+required_role = "kiho-perf-reviewer"
+
+[[phases]]
+id = "decide"
+core_ability = "decide"
+entry_skill = "committee"
+entry_args_template = """
+{
+  "charter": "Value-alignment audit ({index.audit.audit_id}) flagged {index.audit.values_flagged}. Decide: reaffirm, re-rank, or draft trade-off rule.",
+  "participants": ["kiho-perf-reviewer", "kiho-eng-lead", "kiho-pm-lead", "kiho-hr-lead"],
+  "max_rounds": 3,
+  "skip_if": "index.audit.drift_detected == false"
+}
+"""
+output_to_index_path = "decide"
+success_condition = "(index.audit.drift_detected == false) or (index.audit.drift_detected == true and is_set(index.decide.action))"
+on_success = "apply"
+on_failure = "blocked"
+budget_iters = 5
+
+[[phases]]
+id = "apply"
+core_ability = "decide"
+entry_skill = "__hook_only__"
+entry_args_template = """
+{}
+"""
+output_to_index_path = "apply"
+success_condition = "(index.audit.drift_detected == false) or len(index.apply.reaffirmed_values) >= 1 or index.apply.re_ranked == true"
+on_success = "closed-success"
+on_failure = "blocked"
+budget_iters = 3
+
+[budget]
+max_iters = 12
+max_wall_clock_min = 60
+max_pages = 0
+escalate_on_blocked_iters = 3
+
+[lifecycle_hooks]
+on_open = [
+  "memory-write type=todo agent_id=ceo-01 importance=4 content='Quarterly value-alignment cycle {cycle_id} opened'"
+]
+on_close_success = [
+  "memory-write type=lesson agent_id=ceo-01 importance=6 content='Value-alignment cycle {cycle_id} closed; flags aggregated: {index.audit.flags_aggregated}; drift detected: {index.audit.drift_detected}'"
+]
+on_close_failure = [
+  "memo-send to=ceo-01 severity=fyi subject='Value-alignment cycle {cycle_id} closed unexpectedly'"
+]
+on_pause = []
+on_resume = []

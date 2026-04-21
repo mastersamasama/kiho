@@ -1,0 +1,116 @@
+# research-discovery.toml — kiho v5.21+ cycle template
+#
+# Standalone deep-research lifecycle (not embedded in talent or kb-bootstrap).
+# Used when CEO/user wants exhaustive coverage of a topic without committing
+# to hire or KB rewrite — e.g., comparative analysis, technology survey,
+# capability scout for future quarter.
+
+[meta]
+template_id = "research-discovery"
+version = "1.0.0"
+description = "Standalone topic research: cascade (broad) → deep (BFS) → synthesize → kb-add. Use when the org needs deep understanding of a topic but no immediate hire or implementation."
+core_abilities_used = ["research", "build", "deploy"]
+inherits_from = ""
+ceo_visible = true
+
+[parameters]
+required = ["topic", "requestor"]
+optional = { seed_urls = "list[string]", budget_pages_override = "int" }
+
+[index_schema]
+cascade = { sources_collected = "int", recommended_seeds = "list[string]" }
+deep = { skeleton_ref = "string", pages_crawled = "int", status = "string" }
+synthesis = { extracted_concepts_count = "int", synthesis_md_ref = "string" }
+register = { kb_page_ref = "string" }
+
+[[phases]]
+id = "cascade"
+core_ability = "research"
+entry_skill = "research"
+entry_args_template = """
+{
+  "op": "kb-search-then-cascade",
+  "query": "{params.topic} — overview, primary sources, comparative landscape"
+}
+"""
+output_to_index_path = "cascade"
+success_condition = "len(index.cascade.recommended_seeds) >= 1"
+on_success = "deep"
+on_failure = "blocked"
+budget_iters = 3
+required_role = "kiho-researcher"
+
+[[phases]]
+id = "deep"
+core_ability = "research"
+entry_skill = "research-deep"
+entry_args_template = """
+{
+  "topic": "{params.topic}",
+  "seed_urls": "{index.cascade.recommended_seeds}",
+  "role_context": "Topic discovery for {params.requestor}",
+  "budget_pages": 40,
+  "budget_depth": 3
+}
+"""
+output_to_index_path = "deep"
+output_pages = 40
+success_condition = "index.deep.status == 'exhausted' or index.deep.status == 'budget_hit'"
+on_success = "synthesis"
+on_failure = "blocked"
+budget_iters = 6
+required_role = "kiho-researcher"
+
+[[phases]]
+id = "synthesis"
+core_ability = "build"
+entry_skill = "skill-learn"
+entry_args_template = """
+{
+  "op": "synthesize",
+  "skeleton_ref": "{index.deep.skeleton_ref}",
+  "topic": "{params.topic}"
+}
+"""
+output_to_index_path = "synthesis"
+success_condition = "is_set(index.synthesis.synthesis_md_ref) and index.synthesis.extracted_concepts_count >= 3"
+on_success = "register"
+on_failure = "blocked"
+budget_iters = 3
+
+[[phases]]
+id = "register"
+core_ability = "deploy"
+entry_skill = "kiho-kb-manager:kb-add"
+entry_args_template = """
+{
+  "page_type": "topic-overview",
+  "ref": "{index.synthesis.synthesis_md_ref}",
+  "topic": "{params.topic}"
+}
+"""
+output_to_index_path = "register"
+success_condition = "is_set(index.register.kb_page_ref)"
+on_success = "closed-success"
+on_failure = "blocked"
+budget_iters = 2
+
+[budget]
+max_iters = 20
+max_wall_clock_min = 90
+max_pages = 40
+escalate_on_blocked_iters = 3
+
+[lifecycle_hooks]
+on_open = [
+  "memory-write type=todo agent_id=ceo-01 importance=5 content='Research-discovery cycle {cycle_id} for topic {params.topic}'"
+]
+on_close_success = [
+  "memory-write type=lesson agent_id=ceo-01 importance=6 content='Research-discovery {cycle_id} synthesized {index.synthesis.extracted_concepts_count} concepts on {params.topic}'",
+  "kb-add page_type=research-discovery-completion ref={cycle_id}"
+]
+on_close_failure = [
+  "memo-send to=ceo-01 severity=fyi subject='Research-discovery {cycle_id} stopped before synthesis'"
+]
+on_pause = []
+on_resume = []

@@ -1,0 +1,36 @@
+{
+  "name": "kiho",
+  "owner": {
+    "name": "mastersamasama",
+    "url": "https://github.com/mastersamasama"
+  },
+  "metadata": {
+    "description": "Marketplace hosting the kiho plugin — a single-entry multi-agent orchestration harness for Claude Code.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "kiho",
+      "source": "./plugins/kiho",
+      "description": "Single-entry multi-agent orchestration harness for Claude Code. A Ralph-style CEO agent runs a per-turn autonomous loop over a project's plan.md, delegating to department leads, committees, and vendored skills; backed by a three-tier storage doctrine (Tier-1 markdown canonical, Tier-2 JSONL/YAML/TOML processing, Tier-3 on-demand sqlite/embeddings), a live org registry and capability matrix, a two-tier Karpathy-style knowledge base gated by a sole kb-manager agent, and a declarative cycle-runner kernel executing TOML lifecycle templates. Single user entry point: /kiho.",
+      "version": "5.21.0",
+      "author": {
+        "name": "wky"
+      },
+      "homepage": "https://github.com/mastersamasama/kiho/tree/main/plugins/kiho",
+      "license": "MIT",
+      "category": "orchestration",
+      "keywords": [
+        "orchestration",
+        "multi-agent",
+        "harness",
+        "spec-driven",
+        "kiro",
+        "ralph",
+        "committee",
+        "knowledge-base",
+        "cycle-runner"
+      ]
+    }
+  ]
+}

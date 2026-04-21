@@ -1,0 +1,92 @@
+# decision-cycle.toml — kiho v5.21+ cycle template
+#
+# Long-lived decision lifecycle: charter → committee → close → kb-add →
+# (after 90d) → audit → (if stale) → reverse.
+# Most decisions stop at kb-add; the audit + reverse phases fire only on cron.
+
+[meta]
+template_id = "decision-cycle"
+version = "1.0.0"
+description = "Decision lifecycle from charter to long-term audit. Closes after kb-add for routine decisions; high-confidence decisions stay open for periodic re-eval."
+core_abilities_used = ["decide", "deploy", "monitor"]
+inherits_from = ""
+ceo_visible = true
+
+[parameters]
+required = ["topic", "requestor"]
+optional = { participants = "list[string]", post_close_audit_at_iter = "int" }
+
+[index_schema]
+charter = { topic = "string", participants = "list[string]", evidence_refs = "list[string]" }
+committee = { committee_id = "string", outcome = "string", confidence = "float", decision_md_ref = "string" }
+register = { kb_page_ref = "string" }
+audit = { audit_run_at = "string", verdict = "string", reversal_recommended = "bool" }
+reverse = { reversal_committee_id = "string", reversed = "bool" }
+
+[[phases]]
+id = "charter"
+core_ability = "decide"
+entry_skill = "__hook_only__"
+entry_args_template = """
+{}
+"""
+output_to_index_path = "charter"
+success_condition = "is_set(index.charter.topic) and index.charter.topic != ''"
+on_success = "committee"
+on_failure = "blocked"
+budget_iters = 2
+
+[[phases]]
+id = "committee"
+core_ability = "decide"
+entry_skill = "committee"
+entry_args_template = """
+{
+  "topic": "{index.charter.topic}",
+  "participants": "{index.charter.participants}",
+  "evidence_refs": "{index.charter.evidence_refs}",
+  "max_rounds": 3
+}
+"""
+output_to_index_path = "committee"
+success_condition = "index.committee.outcome == 'closed' and is_set(index.committee.decision_md_ref)"
+on_success = "register"
+on_failure = "blocked"
+budget_iters = 3
+
+[[phases]]
+id = "register"
+core_ability = "deploy"
+entry_skill = "kiho-kb-manager:kb-add"
+entry_args_template = """
+{
+  "page_type": "decision",
+  "decision_md_ref": "{index.committee.decision_md_ref}",
+  "confidence": "{index.committee.confidence}"
+}
+"""
+output_to_index_path = "register"
+success_condition = "is_set(index.register.kb_page_ref)"
+on_success = "closed-success"
+on_failure = "blocked"
+budget_iters = 2
+
+[budget]
+max_iters = 15
+max_wall_clock_min = 60
+max_pages = 0
+escalate_on_blocked_iters = 3
+
+[lifecycle_hooks]
+on_open = [
+  "memory-write type=todo agent_id=ceo-01 importance=6 content='Decision cycle {cycle_id} on {params.topic}'"
+]
+on_close_success = [
+  "memory-write type=lesson agent_id=ceo-01 importance=7 content='Decision {cycle_id} ({params.topic}) recorded at {index.register.kb_page_ref} with confidence {index.committee.confidence}'",
+  "kb-add page_type=decision-completion ref={cycle_id}"
+]
+on_close_failure = [
+  "memo-send to=ceo-01 severity=action subject='Decision cycle {cycle_id} failed; topic: {params.topic}'"
+]
+on_pause = []
+on_resume = []

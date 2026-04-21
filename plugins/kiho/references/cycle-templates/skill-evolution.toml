@@ -1,0 +1,122 @@
+# skill-evolution.toml — kiho v5.21+ cycle template
+#
+# Wraps the existing _meta SOP (intake → factory → critic → improve → register).
+# Replaces the v5.20 pattern of CEO manually invoking each step.
+
+[meta]
+template_id = "skill-evolution"
+version = "1.0.0"
+description = "Skill lifecycle: intake → factory → critic → improve → register. Single cycle handles new-skill ingestion or existing-skill FIX iterations."
+core_abilities_used = ["build", "validate", "deploy"]
+inherits_from = ""
+ceo_visible = true
+
+[parameters]
+required = ["mode", "skill_target"]
+optional = { critic_threshold = "float", max_improve_iters = "int" }
+
+[index_schema]
+intake = { intake_artifact_ref = "string", spec_ready = "bool" }
+factory = { batch_id = "string", verdict = "string", verdicts_jsonl_ref = "string" }
+critic = { score = "float", passed = "bool", axes_below_threshold = "list[string]" }
+improve = { iters_attempted = "int", final_score = "float", patch_accepted = "bool" }
+register = { kb_added = "bool", catalog_updated = "bool" }
+
+[[phases]]
+id = "intake"
+core_ability = "build"
+entry_skill = "skill-intake"
+entry_args_template = """
+{
+  "mode": "{params.mode}",
+  "target": "{params.skill_target}"
+}
+"""
+output_to_index_path = "intake"
+success_condition = "index.intake.spec_ready == true"
+on_success = "factory"
+on_failure = "blocked"
+budget_iters = 2
+
+[[phases]]
+id = "factory"
+core_ability = "build"
+entry_skill = "skill-factory"
+entry_args_template = """
+{
+  "regen": "{params.skill_target}",
+  "intake_ref": "{index.intake.intake_artifact_ref}"
+}
+"""
+output_to_index_path = "factory"
+success_condition = "index.factory.verdict != 'red' and index.factory.verdict != ''"
+on_success = "critic"
+on_failure = "blocked"
+budget_iters = 2
+
+[[phases]]
+id = "critic"
+core_ability = "validate"
+entry_skill = "skill-critic"
+entry_args_template = """
+{
+  "skill_path": "{params.skill_target}",
+  "threshold": 0.80
+}
+"""
+output_to_index_path = "critic"
+success_condition = "index.critic.passed == true"
+on_success = "register"
+on_failure = "improve"
+budget_iters = 2
+
+[[phases]]
+id = "improve"
+core_ability = "deploy"
+entry_skill = "skill-improve"
+entry_args_template = """
+{
+  "skill_path": "{params.skill_target}",
+  "failure_evidence": "critic axes_below_threshold: {index.critic.axes_below_threshold}"
+}
+"""
+output_to_index_path = "improve"
+success_condition = "index.improve.patch_accepted == true and index.improve.final_score >= 0.80"
+on_success = "register"
+on_failure = "blocked"
+budget_iters = 3
+
+[[phases]]
+id = "register"
+core_ability = "deploy"
+entry_skill = "kiho-kb-manager:kb-add"
+entry_args_template = """
+{
+  "page_type": "skill-entity",
+  "ref": "{params.skill_target}"
+}
+"""
+output_to_index_path = "register"
+success_condition = "index.register.kb_added == true"
+on_success = "closed-success"
+on_failure = "blocked"
+budget_iters = 2
+
+[budget]
+max_iters = 20
+max_wall_clock_min = 60
+max_pages = 0
+escalate_on_blocked_iters = 3
+
+[lifecycle_hooks]
+on_open = [
+  "memory-write type=todo agent_id=ceo-01 importance=5 content='Skill evolution cycle {cycle_id} for {params.skill_target} ({params.mode})'"
+]
+on_close_success = [
+  "memory-write type=lesson agent_id=ceo-01 importance=6 content='Skill {params.skill_target} evolved via cycle {cycle_id}; final critic score={index.critic.score}'"
+]
+on_close_failure = [
+  "memo-send to=ceo-01 severity=action subject='Skill evolution {cycle_id} failed for {params.skill_target}'"
+]
+on_pause = []
+on_resume = []

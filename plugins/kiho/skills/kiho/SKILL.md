@@ -67,11 +67,30 @@ Run these four steps in order before any delegation. Each step carries its reaso
 | `kb-init` or `kb-init <path>` | kb-init | optional PRD path |
 | `evolve` or `evolve <skill>` | evolve | optional skill name; accepts `--audit=<lens>` for a deterministic read-only audit (lens values: `storage-fit` — verifies `metadata.kiho.data_classes:` against `references/data-storage-matrix.md`; see `skills/_meta/evolution-scan/references/storage-audit-lens.md`) |
 | Path to an existing file | feature-from-prd | absolute path |
+| `--tier=<minimal\|normal\|careful>` | (modifier on any mode) | sets discipline level; logged as `action: tier_declared, value: <tier>` before any delegation |
 | Anything else | unclassified | raw string |
 
 For `unclassified`, the CEO reads `.kiho/state/plan.md` (if present) + last 10 session-context entries, then classifies internally. If still unclear, the CEO calls `AskUserQuestion` (Route C below).
 
 See `references/worked-examples.md` for the four canonical dispatch shapes: implicit feature from plain description, PRD path, vibe, and resume.
+
+## Tier discipline (v5.22)
+
+`--tier` is a modifier, not a mode — it attaches to any of the modes above and controls how strictly the CEO enforces v5.22 invariants. Defaults to `normal` when unspecified. The CEO declares the tier as the first visible line of its response (`TIER: <value>`) and writes `action: tier_declared` as the first ledger entry of the turn, before any delegation.
+
+| Tier | Recruit | Research cascade | Committees | KB writes | User-visible marker |
+|---|---|---|---|---|---|
+| `minimal` | shortcut allowed (logged `recruit_shortcut_taken`) | main-thread OK for any scope | skippable | direct Write allowed (logged `kb_direct_taken`; PreToolUse hook still fires — bypass requires both tier=minimal and content certificate) | ⚠️ MINIMAL TIER — ceremonies skipped |
+| `normal` (default) | quick-hire required for new agents | `kiho:kiho-researcher` preferred; main-thread research OK for <30s sanity checks | mini-committee for non-trivial decisions | via `kiho-kb-manager` only | (none) |
+| `careful` | careful-hire only | `kiho:kiho-researcher` mandatory; main-thread research aborts the turn with a drift flag | full committee with 4 auditors for every spec decision | strictly via `kiho-kb-manager`; no inline edits even with certificate | 🔒 CAREFUL TIER |
+
+**Choosing a tier:**
+
+- **minimal** — throwaway spike, single-file edit, time-boxed exploration, prototype where you explicitly accept drift and want to tag it rather than hide it.
+- **normal** — day-to-day feature / bugfix / refactor work. Use this unless you have a reason not to.
+- **careful** — lead/senior hiring, security-sensitive decisions, production-bound spec, compliance-relevant changes. The full machinery runs and any shortcut is a hard drift flag.
+
+The declared tier does NOT relax the v5.22 PreToolUse hooks (those still fire on every Write/Edit regardless of tier). It DOES change what the CEO treats as a policy violation in its own loop and what `bin/ceo_behavior_audit.py` considers drift.
 
 ## Agent assignments by mode
 

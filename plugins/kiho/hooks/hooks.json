@@ -1,6 +1,17 @@
 {
-  "description": "kiho v5.22 runtime gates. PreToolUse hooks that turn two long-standing invariants into enforced gates: (1) direct Writes to agent.md files must go through the recruit skill; (2) direct Writes/Edits to .kiho/kb/wiki/ must go through kiho-kb-manager. See plugins/kiho/bin/hooks/ for the hook runner scripts and CHANGELOG.md v5.22 for rationale.",
+  "description": "kiho v5.22 runtime gates. PreToolUse hooks that turn two long-standing invariants into enforced gates: (1) direct Writes to agent.md files must go through the recruit skill; (2) direct Writes/Edits to .kiho/kb/wiki/ must go through kiho-kb-manager. SessionStart hook reminds the CEO to declare a tier at the start of every /kiho turn. See plugins/kiho/bin/hooks/ for the hook runner scripts and CHANGELOG.md v5.22 for rationale.",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/bin/hooks/session_start_tier.py",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Write",

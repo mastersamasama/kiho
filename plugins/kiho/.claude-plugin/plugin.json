@@ -1,7 +1,7 @@
 {
   "name": "kiho",
-  "version": "5.21.0",
-  "description": "Single-entry multi-agent orchestration harness for Claude Code. A Ralph-style CEO agent runs a per-turn autonomous loop over a project's plan.md, delegating to department leads, committees, and vendored skills; backed by a three-tier storage doctrine (Tier-1 markdown canonical, Tier-2 JSONL/YAML/TOML processing, Tier-3 on-demand sqlite/embeddings), a live org registry and capability matrix, a two-tier Karpathy-style knowledge base gated by a sole kb-manager agent, and a declarative cycle-runner kernel executing TOML lifecycle templates (talent-acquisition, skill-evolution, kb-bootstrap, incident-lifecycle, decision-cycle, value-alignment, research-discovery). Single user entry point: /kiho. See CLAUDE.md for invariants and CHANGELOG.md for v5 milestone narration.",
+  "version": "5.22.0",
+  "description": "Single-entry multi-agent orchestration harness for Claude Code. A Ralph-style CEO agent runs a per-turn autonomous loop over a project's plan.md, delegating to department leads, committees, and vendored skills; backed by a three-tier storage doctrine (Tier-1 markdown canonical, Tier-2 JSONL/YAML/TOML processing, Tier-3 on-demand sqlite/embeddings), a live org registry and capability matrix, a two-tier Karpathy-style knowledge base gated by a sole kb-manager agent, and a declarative cycle-runner kernel executing TOML lifecycle templates (talent-acquisition, skill-evolution, kb-bootstrap, incident-lifecycle, decision-cycle, value-alignment, research-discovery). v5.22 turns four long-standing invariants into enforced runtime gates: PreToolUse hooks block direct writes to agent.md and .kiho/kb/wiki/, INITIALIZE steps 7 and 14 are REQUIRED, DONE runs a ledger-truthfulness self-audit, and recruit has a pre-emit artifact gate. Single user entry point: /kiho. See CLAUDE.md for invariants and CHANGELOG.md for milestone narration.",
   "author": {
     "name": "wky"
   },
@@ -16,6 +16,8 @@
     "committee",
     "knowledge-base",
     "cycle-runner",
-    "v5.21"
+    "v5.21",
+    "v5.22",
+    "runtime-gates"
   ]
 }

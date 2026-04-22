@@ -6,6 +6,97 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v5.22 (runtime gates — invariants become enforced, not prescriptive)
+
+**Problem v5.22 solves.** A post-hoc audit of 6 `/kiho` sessions on a real project
+(`web3-quant-engine`) found ~10 CRITICAL and 2 MAJOR ledger drifts where the CEO
+claimed canonical subagent targets (`kiho-researcher`, `kiho-kb-manager`) but
+actually spawned `general-purpose` or wrote the files directly. The root cause
+was not incompetence — it was architectural: kiho v5.21 encoded its invariants
+as *prose*, not as *gates*. When convenience and correctness diverged, the LLM
+picked convenience. Full diagnosis in `_proposals/v5.22-gap-fix/00-gap-analysis.md`.
+
+### What shipped
+
+1. **PreToolUse hooks** (`hooks/hooks.json`, `bin/hooks/pre_write_agent.py`,
+   `bin/hooks/pre_write_kb.py`). Direct Writes to `$COMPANY_ROOT/agents/*/agent.md`
+   are blocked unless the content carries a `RECRUIT_CERTIFICATE:` marker emitted
+   only by the recruit skill. Direct Writes/Edits to `.kiho/kb/wiki/*.md` are
+   blocked unless the content carries a `KB_MANAGER_CERTIFICATE:` marker emitted
+   only by kiho-kb-manager. The hook schema now matches Claude Code's documented
+   format (`hooks.json` nested under `{"hooks": {"PreToolUse": [...]}}`); the
+   v5.21 flat `session-start.json` was replaced.
+
+2. **INITIALIZE step 7 and step 14 promoted from LAZY to REQUIRED.** Step 7
+   (KB seed check) now explicitly logs `kb_empty_acknowledged` on fresh projects
+   instead of silently skipping. Step 14 (CEO self-reflection) auto-seeds the
+   `.kiho/agents/ceo-01/memory/` directory with an epoch-0 `.last-reflect` so
+   reflection actually fires — in v5.21 this almost never ran because the
+   directory rarely existed. The REQUIRED set grew from `{1, 3, 5, 10, 11, 12}`
+   to `{0, 1, 3, 5, 7, 10, 11, 12, 14}`.
+
+3. **DONE step 11 ledger integrity self-audit.** Every `/kiho` turn now ends
+   with `bin/ceo_behavior_audit.py` cross-checking each `action: delegate` and
+   `action: kb_add` ledger entry against actual artifacts on disk. Narrative-
+   style targets (`kiho-researcher-x5`) are flagged MAJOR; concatenated tool
+   lists (`deepwiki+websearch`) are flagged CRITICAL. On CRITICAL drift the
+   user summary is prepended with `⚠️` and the drift count — suppression is
+   explicitly forbidden.
+
+4. **`recruit` pre-emit gate.** Before emitting any `agent.md`, `recruit` now
+   verifies that role-spec, interview-simulate transcript, auditor reviews (for
+   careful-hire), committee decision, and rejection-feedback all exist. If any
+   is missing, `recruit` aborts with `status: pre_emit_gate_failed`. The emitted
+   `agent.md` carries the `RECRUIT_CERTIFICATE:` comment the hook looks for.
+
+5. **`--tier=<minimal|normal|careful>` modifier** on `/kiho`. Users can now
+   explicitly accept simplification (`minimal`) or demand full machinery
+   (`careful`) instead of the CEO silently shortcutting. Tier is declared as
+   the first visible line of every CEO response and logged as the first
+   ledger entry. New step 0 in INITIALIZE.
+
+6. **Correction-driven reflection.** When the user's reply to an
+   `AskUserQuestion` contains correction signals (keywords like "actually",
+   "wrong", "should", "bypass" + Chinese equivalents), the CEO invokes
+   `memory-reflect` with `trigger_type: user_correction` before resuming the
+   loop. Corrections update the CEO soul §6/§10 via `soul-apply-override`
+   instead of being lost in the management journal.
+
+7. **Preferred-subagents cheat sheet** at `references/preferred-subagents.md`,
+   read at INITIALIZE step 5b. Maps Intent → `subagent_type` so the CEO picks
+   `kiho:kiho-researcher` instead of `general-purpose`. Silent substitution
+   becomes a MINOR drift flag unless the ledger entry explains why.
+
+8. **Replay harness + 2 scenarios** at `skills/_meta/ceo-replay-harness/`.
+   Scenarios session1 (research) and session5 (hiring) encode expected v5.22
+   behavior; `runner.py` checks a real `ceo-ledger.jsonl` against the
+   expectations. This is a regression net for future kiho changes.
+
+9. **Ledger epoch marker.** First v5.22 turn per project writes
+   `action: ledger_epoch_marker, payload: {epoch: v5.22_active}`. Pre-marker
+   entries are amnestied by the audit script unless `--full` is passed, so
+   v5.21 drift doesn't pollute the first v5.22 audit.
+
+### What it cost
+
+- ~1600 new lines across 6 PRs
+- ~50-100ms hook latency on every Write/Edit (Python startup)
+- One additional Bash call per `/kiho` turn (the DONE self-audit)
+- Pre-v5.22 `agent.md` files without the RECRUIT_CERTIFICATE marker are
+  re-writable via Edit (the hook matches on Write only for agent path), so
+  no breaking change; new agents go through recruit.
+
+### Grounding
+
+Enforcing runtime gates rather than relying on prose invariants mirrors
+Anthropic's own generator/evaluator-separation guidance (harness-design
+doc): when the generator is asked to evaluate its own output it defaults to
+praise; an independent evaluator is far more tractable. `ceo_behavior_audit.py`
+is kiho's independent evaluator. Proposal + diagnosis at
+`_proposals/v5.22-gap-fix/` (committed alongside PR 1 for traceability).
+
+---
+
 ## v5.21 (cycle-runner kernel — single orchestrator for the whole system)
 
 The largest architectural change since v5.0. Every kiho lifecycle (talent-acquisition, incident-handling, skill-evolution, kb-bootstrap, decision-cycle, value-alignment, research-discovery) now runs through a single declarative orchestrator: `cycle-runner`.

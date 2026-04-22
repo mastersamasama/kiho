@@ -20,7 +20,7 @@ Or browse and install interactively via `/plugin`.
 
 | Plugin | Version | Description |
 | ------ | ------- | ----------- |
-| [`kiho`](./plugins/kiho) | 5.21.0 | Single-entry multi-agent orchestration harness — Ralph-style CEO loop, three-tier storage doctrine, cycle-runner kernel. Entry point: `/kiho`. |
+| [`kiho`](./plugins/kiho) | 5.22.0 | Single-entry multi-agent orchestration harness — Ralph-style CEO loop, three-tier storage doctrine, cycle-runner kernel, runtime gates (v5.22 PreToolUse hooks + ledger self-audit). Entry point: `/kiho`. |
 
 ## Repository layout
 

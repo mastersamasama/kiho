@@ -3,7 +3,7 @@ name: recruit
 description: Tiered HR recruitment protocol for creating new agents. Two tiers — quick-hire (2 heterogeneous candidates, mini-committee, fast) and careful-hire (headcount x 4 candidates, 6 interview rounds via interview-simulate(mode=full), 4 auditors, full hiring committee, 8-round persona-stability probe). Produces a role-spec planner before any candidate is drafted, enforces per-dimension hard rubric thresholds, mandates heterogeneous candidate generation, and adds a work-sample dimension grounded in Schmidt-Hunter validity research. Inputs include department, role description, headcount, and tier. Requires an evaluation rubric (creates one via mini-committee if none exists). Delegates per-candidate spawn-and-score to the interview-simulate skill; recruit owns role-spec authorship, candidate pool generation with diversity enforcement, auditor review, and hiring committee convening. Use when a department leader needs more capacity, when the CEO approves a new role, or when HR initiates headcount expansion. Triggers on "recruit", "hire agent", "need more ICs", "add team member", "expand team".
 metadata:
   trust-tier: T2
-  version: 2.0.0
+  version: 2.1.0
   lifecycle: active
   kiho:
     capability: create
@@ -361,6 +361,41 @@ The HR lead passes the persona when spawning each auditor:
 ```
 
 All auditors see all interview-simulate transcripts, aggregate scores, and the per-dim floor report.
+
+## Pre-emit gate (v5.22)
+
+Before writing the final `agent.md` to `$COMPANY_ROOT/agents/<id>/agent.md` (or `agents/_templates/<id>.md`), recruit **MUST** confirm all of the following artifacts exist AND are non-stale (created within this recruit session):
+
+1. **role_spec.md** at `.kiho/state/recruit/<slug>/role-spec.md` (atomic) or `_meta-runtime/role-specs/<spec_id>/role-spec.md` (cycle) — four-field contract complete (objective, output_format, tool_boundaries, termination, scaling_rule, work_sample).
+2. **interview-simulate result** at the transcript path returned by `interview-simulate(mode: light|full)` — typically `.kiho/runs/interview-simulate/<date>-<candidate>.jsonl`. With aggregate score meeting the pass threshold:
+   - quick-hire: `candidate_score >= 3.8 AND worst_weakness >= 3.0 AND work-sample == pass`
+   - careful-hire: `candidate_score >= 4.0 AND worst_weakness >= 3.5 AND r4-coherence >= 4.0 AND r5-team-fit >= 4.0 AND drift <= 0.20 AND persona_stability >= 0.80 AND work-sample == pass`
+3. **For careful-hire only**: 4 auditor reviews captured in the hiring committee log — one per `{skeptic, pragmatist, overlap_hunter, cost_hawk}`.
+4. **For careful-hire only**: committee decision recorded in the run's transcript with a majority approval (≥3/5 members voting `approve`).
+5. **rejection-feedback** written for every non-winning candidate via `rejection-feedback cycle_id=<cycle_id> candidates=[<loser_ids>]` (skip only when there was exactly one candidate, which is forbidden anyway by Non-Goals "Not a pool of 1").
+
+If ANY of (1)–(5) is missing for the applicable tier, recruit **MUST NOT** emit. Abort with:
+```json
+{ "status": "pre_emit_gate_failed", "missing": [<item-ids>], "role_spec_path": "..." }
+```
+
+The emitted `agent.md` **MUST** include a `RECRUIT_CERTIFICATE:` HTML comment as the very first lines of the file so the v5.22 `pre_write_agent` PreToolUse hook (at `plugins/kiho/hooks/hooks.json`) lets the Write through. Template:
+
+```markdown
+<!-- RECRUIT_CERTIFICATE:
+       kind: quick-hire|careful-hire
+       role_spec: <absolute or project-relative path>
+       candidate_slug: <slug>
+       interview_score: <aggregate mean>
+       committee_status: approved
+       emitted_at: <iso-timestamp>
+-->
+---
+name: <agent-name>
+...
+```
+
+Defense in depth: even if recruit is bypassed entirely, the PreToolUse hook blocks the Write unless this header is present. The `bin/ceo_behavior_audit.py` script (DONE step 11) then verifies on session end that markers correspond to real role-spec and interview artifacts — a fake marker with no supporting artifacts is logged as `recruit_no_role_spec` or `recruit_no_interview` CRITICAL drift.
 
 ## Response shape
 

@@ -1,0 +1,27 @@
+{
+  "description": "kiho v5.22 runtime gates. PreToolUse hooks that turn two long-standing invariants into enforced gates: (1) direct Writes to agent.md files must go through the recruit skill; (2) direct Writes/Edits to .kiho/kb/wiki/ must go through kiho-kb-manager. See plugins/kiho/bin/hooks/ for the hook runner scripts and CHANGELOG.md v5.22 for rationale.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/bin/hooks/pre_write_agent.py",
+            "timeout": 5000
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/bin/hooks/pre_write_kb.py",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}

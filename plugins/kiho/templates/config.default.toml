@@ -199,6 +199,63 @@ skill_stale_days = 60
 # ---- Storage-fit grace window (v5.19+) ----
 v5_19_ship_date = "2026-04-18"
 
+# ---- OKR auto-flow (v6.2+) ----
+# Master switch — setting auto_trigger_enabled to false reverts to v6.1
+# explicit-only behavior (user must /kiho okr-set / okr-checkin / okr-close
+# manually). Decision lineage: _proposals/v6.2-okr-auto-flow/ (reversal of
+# committee-01 no-auto-cadence by user direct override 2026-04-24).
+[okr]
+auto_trigger_enabled = true
+
+# How many days before a period starts to nudge user for company OKRs.
+# Scanner emits `propose-company` action within this window or during the
+# first 30 days of a period that has no company O.
+nudge_days_before_start = 7
+
+# Silence window after user dismisses a company-O nudge. Prevents nudge fatigue.
+nudge_cooldown_days_after_dismiss = 7
+
+# Days since last KR checkin before stale-memo fires. 30 = quarterly cadence
+# assumption; lower for faster-tempo orgs.
+stale_days = 30
+
+# Cascade behavior when a parent O closes. Valid: "deferred" (default — preserves
+# option value; children go status: deferred) | "archive" (children closed with
+# narrative; cannot be revived this period).
+cascade_rule = "deferred"
+
+# If true, cycle-runner on_cycle_close_success dispatches okr-checkin for any
+# cycle with aligns_to_okr set. Derive formula is conservative (see
+# bin/okr_derive_score.py in v6.2 PR 3).
+auto_checkin_from_cycle = true
+
+[okr.auto_set]
+# If true, HR-lead proposes an individual O for any new agent after N iterations
+# on-boarded. Dept-lead reviews per the okr-individual approval chain.
+individual_on_onboard = true
+
+# Iterations threshold at which an onboarded agent is eligible for an
+# individual-O proposal. Below this, the agent hasn't accumulated enough
+# memory/experience to draft meaningfully.
+onboard_threshold_iter = 30
+
+# Maximum individual Os HR-lead dispatches per department per period. Prevents
+# OKR inflation in large departments. Conservative default.
+individual_max_per_dept = 5
+
+# If true, dept-lead-convened OKR committees closing with `propose_okr: true`
+# in their decision text auto-invoke okr-set level=department.
+dept_from_committee = true
+
+[okr.period]
+# Default period kind. Only quarterly + half-year are auto-scannable; "custom"
+# slugs (YYYY-<custom-slug>) are supported but don't auto-close.
+default_kind = "quarterly"
+
+# If true, scanner's period-close action triggers batch-close at period end.
+auto_close_on_period_end = true
+
+
 # ---- Research cascade ----
 
 # Max wall-clock minutes any single research cascade step may consume.

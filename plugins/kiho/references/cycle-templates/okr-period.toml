@@ -1,0 +1,141 @@
+# okr-period.toml — kiho v6.2+ cycle template
+#
+# The OKR period lifecycle. Runs for the duration of a period (default
+# quarterly). Composed of 6 phases: sweep (detect state), company-propose
+# (user-gated), dept-cascade (dept-lead committees), individual-cascade
+# (HR-dispatched, experience-driven drafting with multi-party review),
+# period-execute (cross-cycle checkins via hook), close (batch + cascade).
+#
+# Decision: v6.2 OKR auto-flow (reverses committee-01's no-auto-cadence).
+# User direct override recorded in _proposals/v6.2-okr-auto-flow/00-reversal.md.
+
+[meta]
+template_id = "okr-period"
+version = "1.0.0"
+description = "End-to-end OKR period lifecycle: auto-sweep → company propose (user-gated) → dept cascade → individual cascade (HR-dispatched) → execute (cycle-hook checkins) → close (batch + cascade)."
+core_abilities_used = ["decide", "orchestrate", "communicate"]
+inherits_from = ""
+ceo_visible = true
+
+[parameters]
+required = ["period"]
+optional = { nudge_days_before_start = "int", skip_individual_cascade = "bool", period_end_date_override = "string" }
+
+[index_schema]
+sweep = { actions_proposed = "list[string]", scanner_today = "string" }
+company_propose = { candidates_drafted = "int", user_accepted_o_id = "string", user_dismissed = "bool" }
+dept_cascade = { depts_memoed = "list[string]", committees_opened = "list[string]", depts_with_o = "list[string]", depts_opted_out = "list[string]" }
+individual_cascade = { hr_lead_memoed = "bool", drafts_received = "int", drafts_approved = "int", drafts_rejected = "int", drafts_revised = "int" }
+period_execute = { checkins_from_cycle = "int", stale_memos_sent = "int", last_sweep_at = "string" }
+close = { leaf_closes = "int", dept_closes = "int", company_closes = "int", cascade_defers = "int" }
+
+# === Phase 1: sweep ===
+# Runs once per /kiho turn during INITIALIZE step 17.5. The scanner is the
+# source of truth for what happens next — all downstream phases consume its
+# actions[] list.
+[[phases]]
+id = "sweep"
+core_ability = "decide"
+entry_skill = "kiho:okr-auto-sweep"
+entry_args_template = """
+{
+  "op": "sweep",
+  "period": "{params.period}",
+  "today": "{runtime.today_iso}"
+}
+"""
+success_condition = "sweep_complete"
+on_success_hook = "memory-write"
+on_failure_hook = "memo-send"
+
+# === Phase 2: company-propose ===
+# User-gated. If the scanner's `propose-company` action fires, OKR-master
+# drafts 2-3 candidates and bubbles to CEO for AskUserQuestion. If user
+# dismisses, the nudge cooldown applies.
+[[phases]]
+id = "company-propose"
+core_ability = "decide"
+entry_skill = "kiho:okr-set"
+entry_args_template = """
+{
+  "level": "company",
+  "period": "{params.period}",
+  "draft_source": "okr-master-auto",
+  "require_user_accept": true
+}
+"""
+success_condition = "company_o_emitted_or_skipped"
+next_on_skip = "dept-cascade"
+on_success_hook = "memo-send"
+
+# === Phase 3: dept-cascade ===
+# OKR-master memos each dept-lead to open an OKR committee. Phase waits for
+# committee closes (asynchronous across /kiho turns; the scanner re-detects
+# at next sweep whether any dept O emerged).
+[[phases]]
+id = "dept-cascade"
+core_ability = "communicate"
+entry_skill = "kiho:okr-dept-cascade"   # NEW in v6.2 PR 2
+entry_args_template = """
+{
+  "company_o_id": "{index.company_propose.user_accepted_o_id}",
+  "period": "{params.period}"
+}
+"""
+success_condition = "all_depts_have_o_or_opted_out"
+
+# === Phase 4: individual-cascade ===
+# THE HR-dispatched, experience-driven individual-O drafting flow. See
+# skills/core/okr/okr-individual-dispatch/SKILL.md (v6.2 PR 2).
+[[phases]]
+id = "individual-cascade"
+core_ability = "orchestrate"
+entry_skill = "kiho:okr-individual-dispatch"  # NEW in v6.2 PR 2
+entry_args_template = """
+{
+  "period": "{params.period}",
+  "dept_o_scope": "{index.dept_cascade.depts_with_o}",
+  "max_per_dept": 5
+}
+"""
+success_condition = "individual_reviews_complete"
+
+# === Phase 5: period-execute ===
+# Runs across every /kiho turn while the period is active. The cycle-runner
+# lifecycle_hooks.on_cycle_close dispatches okr-checkin (v6.2 PR 3) for any
+# cycle with aligns_to_okr set. The stale-memo subphase runs at INITIALIZE.
+[[phases]]
+id = "period-execute"
+core_ability = "monitor"
+entry_skill = "kiho:okr-auto-sweep"   # same sweep, different consumer subset
+entry_args_template = """
+{
+  "op": "sweep",
+  "period": "{params.period}",
+  "consume_subset": ["stale-memo"]
+}
+"""
+success_condition = "period_end_reached"
+lifecycle_hooks.on_cycle_close_success = "okr-checkin"  # v6.2 PR 3
+
+# === Phase 6: close ===
+# Batch close at period end. Leaf-first traversal: individual → dept →
+# company. Cascade rule applied per config.
+[[phases]]
+id = "close"
+core_ability = "decide"
+entry_skill = "kiho:okr-close-period"   # NEW in v6.2 PR 3
+entry_args_template = """
+{
+  "period": "{params.period}",
+  "cascade_rule": "{config.okr.cascade_rule}"
+}
+"""
+success_condition = "all_os_closed"
+on_success_hook = "memo-send"
+
+[budget]
+max_iters = 30            # cycle re-enters each /kiho turn; cap prevents infinite bounce
+max_wall_clock_min = 60   # cumulative across the period
+max_pages = 200           # scanner runs + memo fanout — bounded
+escalate_on_blocked_iters = 5

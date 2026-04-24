@@ -10,22 +10,60 @@ The OKR framework lands in kiho v6.1 (per committee decision `okr-framework-2026
 - Three levels — **company** (you set, as the employer), **department** (dept-lead committee sets), **individual** (agent proposes, dept-lead approves).
 - You invoke `/kiho` to set, check in on, and close OKRs.
 
-## When to make OKRs
+## When OKRs happen (v6.2+ — mostly auto)
 
-**Quarterly, at the start of each period.** The most common pattern — and the one this framework is designed for — is the first /kiho turn of a new quarter, where you set 1–5 company-level Objectives. Department OKRs then flow from those, and individual agent OKRs cascade down.
+**You (the employer) only directly set COMPANY OKRs. Everything else auto-flows.** Department OKRs are produced by dept-lead committees. Individual OKRs are HR-dispatched, agent-drafted-from-experience, and multi-party-reviewed. Check-ins happen on cycle close. Closes happen at period end.
 
-Specifically, set OKRs when:
+The automatic triggers:
 
-- **New quarter begins** — the default trigger. Set company Os at the start of Q1, Q2, Q3, Q4.
-- **A new initiative kicks off** — mid-quarter, if a significant new effort starts (e.g., a security audit, a refactor), set a short-horizon Objective (1–3 months) that runs until complete.
-- **After a postmortem** — if a sev1 incident revealed a systemic gap, a remediation Objective with a deadline is appropriate.
-- **When you realize the org is drifting** — if retrospectives keep surfacing "we're busy but I'm not sure where this is going", that's the Objectives layer talking.
+| Event | What happens | Who acts | Your involvement |
+|---|---|---|---|
+| Start of each quarter (within first 30 days) | `bin/okr_scanner.py` at CEO INITIALIZE detects no company O for current period → OKR-master drafts 2-3 candidates from your plan.md + last retrospective + dashboard → CEO bubbles via `AskUserQuestion` | OKR-master drafts, CEO bubbles | **You accept / edit / dismiss** |
+| Company O set, no dept O yet | OKR-master memos each dept-lead → dept-lead convenes OKR committee → committee closes → auto `okr-set level=department` with `DEPT_COMMITTEE_OKR_CERTIFICATE` | dept-leads + committees | none |
+| Dept O set, no individual Os yet | OKR-master memos HR-lead → HR-lead dispatches qualifying agents with experience-using brief → agents draft Os citing their memory → lightweight committee (dept-lead + HR + OKR-master) reviews → approve / revise / reject | HR-lead + agents + review committee | none (optional user seat for high-risk drafts) |
+| Plan.md task added | `kiho-plan` does keyword match → auto-tags `aligns_to_okr` to relevant individual or dept O | kiho-plan | none |
+| Cycle closes success | cycle-runner `on_close_success` hook → `okr-checkin` with derived score (conservative formula: `0.05 × weight/100` per aligned KR) | cycle-runner | none |
+| Active O with no checkin > 30 days | CEO INITIALIZE memo owner (severity=action) | CEO | none |
+| Period ends (today > period.end) | Batch `okr-close` all active Os, leaf-first | OKR-master | none |
+| Parent O closed with aggregate < 0.3 | Cascade: children go `status: deferred` (per `[okr] cascade_rule`) | OKR-master | none |
 
-Do **not** set OKRs when:
+### Your direct invocations (optional — auto-flow covers these, but you can always override)
 
-- The work is a single-file bugfix or quick spike (use `/kiho --vibe` or `/kiho --bugfix` directly).
-- You already have a plan.md task that expresses the work — plan.md tasks are the execution layer; OKRs are the direction layer.
-- You are tempted to set an OKR **for the agent**, on the agent's behalf, without a real business outcome. OKRs are for your outcomes, not the agent's activities.
+- `/kiho set a company OKR ...` — proactive company O without waiting for the quarter-start nudge
+- `/kiho okr-checkin O-<id> ...` — manual override of auto-checkin, e.g., narrative context
+- `/kiho close out 2026-Q2 OKRs` — early close before period end
+- `/kiho show my OKRs` — walks the alignment tree via OKR-master
+
+### When you should NOT reach for OKRs
+
+- Single-file bugfix or quick spike (use `/kiho --vibe` or `/kiho --bugfix`).
+- A plan.md task that expresses the work fully — plan.md is the execution layer.
+- "Objectives" you'd set on an agent's behalf without a real business outcome (that's activity tracking, not OKRs).
+
+## How to disable auto-flow (opt back into v6.1 explicit-only)
+
+Set in `<project>/.kiho/config.toml` or `$COMPANY_ROOT/settings.md`:
+
+```toml
+[okr]
+auto_trigger_enabled = false        # master switch — reverts to v6.1 explicit-only behavior
+```
+
+Or disable individual features:
+
+```toml
+[okr.auto_set]
+individual_on_onboard = false       # HR-lead won't auto-propose individual Os at onboard
+dept_from_committee = false         # OKR-topic committees won't auto-create dept Os
+
+[okr]
+auto_checkin_from_cycle = false     # cycle-runner won't auto-checkin on cycle close
+
+[okr.period]
+auto_close_on_period_end = false    # period end won't batch-close
+```
+
+The atomic primitives (`okr-set`, `okr-checkin`, `okr-close`) remain functional under all configurations — auto-flow is an orchestration layer on top of them.
 
 ## The three levels
 

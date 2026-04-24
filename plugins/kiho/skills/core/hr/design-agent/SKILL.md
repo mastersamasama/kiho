@@ -1,455 +1,531 @@
 ---
 name: design-agent
-description: Deliberative agent designer that produces validated kiho agent .md files through a 12-step pipeline. Drafts a rich v5 soul (12 sections), declares memory block architecture (Letta-style persona/domain/user blocks), runs internal coherence check plus a self-audit pass, validates the tool allowlist against behavioral rules, selects the model tier from task signals, tests team-fit against existing agents, generates a 7-test validation suite, invokes interview-simulate for REAL pre-deployment simulation (not theoretical scoring), and scores the draft on a 5-dimension rubric before deploying. For careful-hire scenarios, convenes a 3-agent design committee. Minimum pass gates: coherence >= 0.70, alignment >= 0.70, fit >= 0.60, rubric avg >= 4.0/5.0, drift <= 0.20. Use when HR recruits a new agent, when a department needs a specialized IC, when the CEO bootstraps the organization, or when a careful-hire reassessment is triggered.
+description: v6 agent designer producing fully-formed schema v2 agent.md files. Parses role spec, derives required_skills from role signals (proposes new skill IDs when needed), validates each skill against $COMPANY_ROOT/skills/ and triggers Phase 2 fill-back for missing, builds a persona with portable (no-project-names) role strings, builds a v5 12-section soul with portable biography, populates v2 frontmatter (schema_version=2, role_generic, role_specialties, experience=[], current_state.availability="free", skills=[resolved IDs], memory_path, hire_provenance), writes agent.md and runs bin/agent_md_lint.py inline, seeds memory/{lessons,todos,observations}.md from the interview + work-sample, emits a RECRUIT_CERTIFICATE marker. Also supports op=propose_recipe (Phase 2 THINK step) and op=synthesize_candidates (Phase 5 merge step). Use from recruit Phases 2/3/5 or directly when HR-lead commands agent drafting with a validated role spec. Supersedes the v5 12-step create path.
 metadata:
   trust-tier: T2
+  version: 3.0.0
+  lifecycle: active
   kiho:
     capability: create
-    topic_tags: [hiring, persona]
+    topic_tags: [hiring, persona, schema-v2]
     data_classes: ["agent-souls", "agent-md"]
+    storage_fit:
+      reads: ["$COMPANY_ROOT/skills/**", "$COMPANY_ROOT/project-registry.md", "$COMPANY_ROOT/settings.md"]
+      writes: ["$COMPANY_ROOT/agents/<id>/agent.md", "$COMPANY_ROOT/agents/<id>/memory/{lessons,todos,observations}.md"]
 ---
-# design-agent
+# design-agent (v6)
 
-Deliberative agent designer. Instead of template-filling, design-agent drafts a candidate agent, interrogates its own coherence (by hand and via self-audit), checks tools and model tier against the task profile, tests it against the existing team, and runs **real simulation** via `interview-simulate` before shipping. A failing gate triggers revision, not silent approval. The output is a validated .md file plus a test suite stored alongside it and a transcript of the simulation run.
+Deliberative agent designer. Produces FULLY-FORMED schema v2 `agent.md`
+files — not thin persona stubs. Every output agent has `experience`,
+`current_state`, validated `skills`, populated `memory/` directory, and
+passes `bin/agent_md_lint.py`. Invoked by `recruit` in Phases 2, 3, and 5.
 
-## Contents
-- [Inputs](#inputs)
-- [Pipeline overview](#pipeline-overview)
-- [Minimum pass gates](#minimum-pass-gates)
-- [Step 0: Intake](#step-0-intake)
-- [Step 1: Requirements dict](#step-1-requirements-dict)
-- [Step 2: Draft candidate soul](#step-2-draft-candidate-soul)
-- [Step 2b: Memory block architecture](#step-2b-memory-block-architecture)
-- [Step 3: Coherence check](#step-3-coherence-check)
-- [Step 3b: Self-contradiction audit](#step-3b-self-contradiction-audit)
-- [Step 4: Soul-skill alignment](#step-4-soul-skill-alignment)
-- [Step 4b: Tool allowlist validation](#step-4b-tool-allowlist-validation)
-- [Step 4c: Model tier selection](#step-4c-model-tier-selection)
-- [Step 4d: Capability gap resolution](#step-4d-capability-gap-resolution)
-- [Step 5: Team-fit check](#step-5-team-fit-check)
-- [Step 6: Test case generation](#step-6-test-case-generation)
-- [Step 7: Interview simulation](#step-7-interview-simulation)
-- [Step 8: Committee review](#step-8-committee-review)
-- [Step 9: Deploy with test suite](#step-9-deploy-with-test-suite)
-- [Step 10: Register](#step-10-register)
-- [Frontmatter rules](#frontmatter-rules)
-- [Body structure](#body-structure)
-- [Response shape](#response-shape)
-- [Anti-patterns](#anti-patterns)
+v6 replaces the v5 12-step pipeline with an 8-step v2-producing flow. The
+v5 soul validation stays; the v5 thin frontmatter does not. Missing skills
+are NOT a silent capability downgrade — they trigger Phase 2 fill-back via
+`kiho-researcher + skill-derive`.
 
-## Inputs
+## Operations
 
-```
-role:        <description of what the agent does — e.g., "Frontend IC specializing in React component development">
-department:  engineering | pm | hr | qa
-name:        <optional — auto-generated as <dept>-<role-slug>-ic if not provided>
-model_hint:  <optional — sonnet | opus | haiku. Step 4c treats this as a hint, not a rule>
-tools:       [<explicit tool list, or "auto" for automatic selection>]
-conditions:  [<additional constraints or persona traits>]
-tier:        quick-hire | careful-hire   # committee review runs only for careful-hire
-is_template: <true | false — if true, written to agents/_templates/>
-requestor:   <agent-id of the department leader or HR lead requesting>
-```
+This skill supports three ops called by `recruit`:
 
-## Pipeline overview
-
-```
-Step 0:  Intake                    -> design brief (role, goal, deliverable, constraints)
-Step 1:  Requirements dict         -> structured requirements
-Step 2:  Draft candidate soul      -> candidate_soul v5 (12 sections)
-Step 2b: Memory block architecture -> persona_block, domain_block, user_block declarations
-Step 3:  Coherence check           -> coherence_score from 8 pairings              gate >= 0.70
-Step 3b: Self-contradiction audit  -> candidate self-audits; 9th coherence input
-Step 4:  Soul-skill alignment      -> alignment_score                              gate >= 0.70
-Step 4b: Tool allowlist validation -> alignment_subscore_tools                     gate >= 0.70
-Step 4c: Model tier selection      -> model + model_justification
-Step 4d: Capability gap resolution -> resolve missing skills/tools, DRAFT or escalate (v5.10)
-Step 5:  Team-fit check            -> fit_score                                    gate >= 0.60
-Step 6:  Test case generation      -> 7-test validation suite (was 5)
-Step 7:  Interview simulation      -> REAL run via interview-simulate(mode: light) gate mean>=4.0, worst>=3.5, drift<=0.20
-Step 8:  Committee review          -> careful-tier only, 3-agent debate
-Step 9:  Deploy with test suite    -> write agent .md + tests.md + transcript
-Step 10: Register                  -> org-registry, capability-matrix, KB
-```
-
-Every gate between Step 3 and Step 7 can fail. On failure, design-agent returns to the earliest relevant step (usually Step 2) and revises. Max 3 revision loops per gate; then abort with `status: revision_limit_exceeded` and escalate.
-
-## Minimum pass gates
-
-| Gate | Dimension | Threshold | Source |
-|---|---|---|---|
-| Step 3 + 3b | coherence_score | >= 0.70 | kiho soul-architecture + self-audit |
-| Step 4 | alignment_score | >= 0.70 | soul-skill coherence rules |
-| Step 4b | alignment_subscore_tools | >= 0.70 | agent-design-best-practices §Tool allowlist |
-| Step 5 | fit_score | >= 0.60 | team complementarity + red-line compat |
-| Step 7 | rubric_avg | >= 4.0/5.0 AND worst_dim >= 3.5 AND drift <= 0.20 | interview-simulate + Anthropic eval guidance |
-
-A draft that fails any gate is not deployed. A draft that passes all gates may still be rejected by the committee in Step 8 (careful-hire only).
-
-## Step 0: Intake
-
-Produce a compact design brief from the raw inputs. This is the equivalent of a PRD for the agent.
-
-```yaml
-design_brief:
-  role_title:        <one noun phrase>
-  goal:              <one sentence — the primary objective the agent pursues>
-  deliverable_shape: <what the agent produces when it succeeds — code, report, decision, routing>
-  success_signal:    <how we know the agent did its job — committee vote, test pass, user acceptance>
-  hard_constraints:  <what the agent MUST respect — tool restrictions, model caps, latency budgets>
-  task_profile_signals:
-    long_horizon:      <true | false>
-    multi_step_tools:  <true | false>
-    committee_role:    <true | false>
-    deep_reasoning:    <true | false>
-    high_volume:       <true | false>
-    latency_sensitive: <true | false>
-```
-
-The task profile signals feed Step 4c. `goal` and `success_signal` are written verbatim into Soul Section 1 (Core identity) and the body's "Responsibilities" section.
-
-## Step 1: Requirements dict
-
-Parse the design brief + raw inputs into a `requirements` dict:
-
-- `role_description`, `department`, `headcount`
-- `deep_expertise_areas` — domains the role must cover (derived from role_description + goal)
-- `tool_requirements` — from `tools` input or inferred from department (see `references/skill-authoring-standards.md`)
-- `hard_constraints` — from `conditions` + brief.hard_constraints
-- `reports_to` — the requesting agent (default)
-- `existing_team` — glob `agents/*.md` + `agents/_templates/*.md` for the department
-
-If `name` is not provided, generate one: ICs get `<dept>-<role-slug>-ic`; leads get `kiho-<dept>-lead`; specialists get `kiho-<role-slug>`. Validate: max 64 chars, lowercase, hyphens only, no `anthropic` or `claude`.
-
-## Step 2: Draft candidate soul
-
-Draft a v5 soul filling all 12 sections per `references/soul-architecture.md`:
-
-1. Core identity (name, role, reports_to, department, biography)
-2. Emotional profile (attachment, stress response, dominant emotions, triggers)
-3. Personality (Big Five with 1-10 scores AND concrete behavioral anchor per trait)
-4. Values with red lines (3-5 ranked values, each with a verb+object red line; optional DSL block)
-5. Expertise and knowledge limits (deep areas, defer-to targets, capability ceiling, known failure modes)
-6. Behavioral rules (5-7 if-then rules — each verb must trace to an allowed tool)
-7. Uncertainty tolerance (act/consult/escalate thresholds + hard escalation triggers)
-8. Decision heuristics (3-5 fast-path rules consistent with Big Five)
-9. Collaboration preferences (feedback style, committee role, conflict style, works-with profile)
-10. Strengths + blindspots (3 each, traceable to Big Five)
-11. Exemplar interactions (2-3 few-shot examples; each must visibly exercise Sections 5-8; at least one must show a refusal)
-12. Trait history (empty at draft; append-only)
-
-The draft must fill every section. An empty section is an automatic Step 3 failure. Exemplars must reference at least one trait from Section 5 (Expertise), Section 6 (Rules), Section 7 (Uncertainty), and Section 8 (Decision heuristics) — they exist to prove the traits are load-bearing.
-
-## Step 2b: Memory block architecture
-
-Declare the candidate's memory architecture in the draft frontmatter. Based on Letta/MemGPT: separate editable scopes for persona identity vs domain knowledge vs user/context data.
-
-```yaml
-memory_blocks:
-  persona:  { source: "## Soul body section", max_chars: 8000, editable_by: [ceo-01, hr-lead-01] }
-  domain:   { source: ".kiho/agents/<name>/memory/lessons.md", max_chars: 4000, editable_by: [self, dept-lead] }
-  user:     { source: ".kiho/agents/<name>/memory/user-context.md", max_chars: 2000, editable_by: [self] }
-  archival: { source: ".kiho/agents/<name>/memory/{observations,reflections,todos}.md", max_chars: unbounded, editable_by: [self] }
-```
-
-**Validation:**
-- Every agent must have at least `persona` + `archival` blocks.
-- Total persona + domain + user block character count must not exceed 14000 (research threshold — longer persona injection produces drift).
-- The `persona.source` must equal `"## Soul body section"`; other values abort the step.
-
-Memory block declarations are recorded in frontmatter for runtime memory-read routing. `memory-read` honors `editable_by` when processing `memory-write` requests.
-
-## Step 3: Coherence check
-
-Score the candidate soul on internal coherence by checking 8 pairings. Each pairing scores 0.0–1.0; the coherence_score is the mean of all 9 contributions (8 pairings + the Step 3b self-audit).
-
-| # | Pairing | Check |
+| op | Called from | Purpose |
 |---|---|---|
-| 1 | Big Five × Value #1 | Does the top-ranked value follow from the Big Five pattern? |
-| 2 | Big Five × Behavioral rules | Do the rules reflect the trait scores? |
-| 3 | Values × Red lines | Do the red lines protect the values? |
-| 4 | Uncertainty × Neuroticism | Do the thresholds match Neuroticism? |
-| 5 | Collab prefs × (Agreeableness × Extraversion) | Do preferences match the social trait pattern? |
-| 6 | Strengths × Big Five pattern | Are strengths traceable to specific traits? |
-| 7 | Blindspots × Big Five pattern | Are blindspots predictable shadows of the scores? |
-| 8 | Exemplars × traits 5-8 | Do exemplars visibly exercise Expertise, Rules, Uncertainty, and Decision heuristics? |
+| `propose_recipe` | recruit Phase 2.1 (THINK) | Propose persona + wanted_skills list given a role-spec stub; skills may be unresolved |
+| `draft_candidate` (default) | recruit Phase 3 | Produce a full v2 agent.md draft from a validated recipe + diversity axis |
+| `synthesize_candidates` | recruit Phase 5.3a | Merge top-2 agent.md files into a single synthesized candidate |
 
-Gate: coherence_score >= 0.70 after Step 3b is included.
-
-## Step 3b: Self-contradiction audit
-
-Run the candidate against the coherence self-audit prompt in `references/agent-design-best-practices.md` §"Coherence self-audit prompt template". The candidate produces a 7-pairing report, each labeled CONSISTENT / SOFT TENSION / HARD CONTRADICTION.
-
-**Scoring contribution:**
+## Inputs (draft_candidate — default op)
 
 ```
-self_audit_contribution = 1.0
-  - 0.15 × (count of HARD CONTRADICTION)
-  - 0.05 × (count of SOFT TENSION)
-clamp to [0, 1]
+role_spec_path: <path to role-spec.md from recruit Phase 1>
+recipe: <validated recipe from Phase 2 — persona_draft + resolved skills>
+diversity_axis: seniority | philosophy | specialty | any
+axis_emphasis: <string — "experienced conservative" | "mid-level autonomous" | "safety-first" | "breadth over depth">
+requestor: <agent-id — usually kiho-hr-lead>
+is_synthesis: <bool — default false; true only when called by Phase 5>
 ```
 
-This is the 9th contribution to the mean for `coherence_score`. If the candidate reports >=2 HARD CONTRADICTIONs, abort without averaging and return to Step 2 with the contradictions named.
-
-**Why self-audit:** Research (arXiv 2305.15852) shows LLMs can reliably surface their own inconsistencies when prompted; this catches contradictions the 8 hand-authored pairings miss.
-
-## Step 4: Soul-skill alignment
-
-Use the soul-skill coherence rules from `references/soul-architecture.md` (trait-to-skill mapping + value-to-skill mapping + scoring algorithm).
-
-Summary:
-- Each candidate skill in the `skills:` frontmatter list gets a trait-fit subscore and a value-fit subscore.
-- trait-fit = how well the skill's demanded traits match the agent's Big Five scores.
-- value-fit = whether the skill reinforces or contradicts the top value.
-- alignment_score = mean of (trait-fit + value-fit) / 2 across all assigned skills.
-
-Read `.kiho/state/capability-matrix.md` (if present) for available skills per department; otherwise fall back to department defaults (sk-engineering-*, sk-pm-*, sk-hr-*, sk-qa-*).
-
-Gate: alignment_score >= 0.70. On failure, either prune the ill-fitting skills (if role allows) or return to Step 2 and adjust traits. Do not force a bad match.
-
-## Step 4b: Tool allowlist validation
-
-Run the rules in `references/agent-design-best-practices.md` §"Tool allowlist validation rules":
-
-- **Rule 1** — Every behavioral rule (Soul Section 6) must trace to an allowed tool via the verb→tool table.
-- **Rule 2** — Every allowed tool must serve at least one behavioral rule, responsibility, or working-pattern bullet. Orphan tools trip warnings; 3+ orphans trip a revision loop.
-- **Rule 3** — No forbidden tools (AskUserQuestion except CEO; WebSearch/WebFetch except researcher; Agent except leads; Bash except eng/qa/kb-manager).
-- **Rule 4** — Minimum tool floor: `Read` + one writing tool (Write or Edit), unless `role: observer`.
-
-**Scoring:**
+## 8-step pipeline (draft_candidate)
 
 ```
-alignment_subscore_tools = 1.0
-  - 0.15 × (rules pointing to missing tools)
-  - 0.05 × (orphan tools)
-  - 0.50 × (forbidden tool violations — hard cap)
+Step 1  — Parse role-spec + recipe; derive required_skills
+Step 2  — Validate each skill; trigger Phase 2 fill-back if missing
+Step 3  — Build persona (portable, no project names — lint R3 clean)
+Step 4  — Build v5 12-section soul (portable biography, portable red lines)
+Step 5  — Populate v2 frontmatter (schema_version=2, current_state, experience=[],
+           skills=[resolved IDs], memory_path, tools, hire_provenance stub)
+Step 6  — Write agent.md; run bin/agent_md_lint.py; reject on R1-R6 errors
+Step 7  — Seed memory/{lessons, todos, observations}.md from interview +
+           role-spec.work_sample + persona coherence notes
+Step 8  — Emit hire_provenance frontmatter + RECRUIT_CERTIFICATE marker
 ```
 
-Gate: alignment_subscore_tools >= 0.70. On failure, return to Step 2 and fix the mismatched rules OR adjust the tool list.
+## Step 1 — Parse role-spec + derive required_skills
 
-## Step 4c: Model tier selection
+Read:
+- `role_spec_path` — the four-field contract from recruit Phase 1
+- `recipe.persona_draft` — role_generic, specialties, soul_traits_hint
+- `recipe.skills_resolved` — list of validated skill IDs
 
-Apply the decision table in `references/agent-design-best-practices.md` §"Model-tier decision table" to the task profile signals from Step 0:
+`required_skills` for this candidate **MAY** extend or narrow `recipe.skills_resolved`
+based on the candidate's `diversity_axis`:
 
-```
-if long_horizon OR committee_role: model = "opus"
-elif multi_step_tools OR deep_reasoning: model = "sonnet"
-elif high_volume OR latency_sensitive: model = "haiku"
-else: model = "sonnet"   # default
-```
+- `seniority`-emphasis senior candidates often propose additional
+  architectural-review skills (e.g., `sk-review-heuristics`)
+- `philosophy`-emphasis safety-first candidates often narrow the skill set
+  and add `sk-refusal-patterns`
+- `specialty`-emphasis breadth candidates propose adjacent specialties
 
-Record the driving signals in `design_score.model_justification`, e.g.:
-`"opus: long-horizon reasoning + committee deliberation role (CEO)"`.
+When this candidate proposes NEW skill IDs beyond the recipe, emit
+`new_skill_proposals: [{id_hint, description, feature_list, rationale}]` —
+recruit Phase 3.5 will reconcile them.
 
-If the caller's `model_hint` disagrees with the computed choice by more than one tier (hint=haiku, computed=opus), log the disagreement and proceed with the computed tier. The `model_hint` is a hint, not an override.
-
-## Step 4d: Capability gap resolution
-
-**New in v5.10, dual-routed in v5.11.** Runs only if Step 4 or Step 4b reported gaps that would otherwise force silent capability downgrade. Cascades through four classifications (Derivable, Researchable, MCP, Unfillable) to either close the gap or escalate cleanly.
-
-**Full spec in `references/capability-gap-resolution.md`** (per-skill reference). Plugin-level canonical at `references/capability-gap-resolution.md`.
-
-### Trigger
-
-Run Step 4d when either:
-- Step 4 reported missing required skills with `alignment_score < 0.70` AND the role strongly implies those skills are best practice
-- Step 4b reported rules referencing tools not in the current environment AND the candidate cannot be reworked to drop the tool
-
-Skip when the gap can be pruned (rule was aspirational) or when a prior DRAFT resolution exists for the same gap (idempotency).
-
-### Gap classes (summary)
-
-| Class | Definition | Resolver |
-|---|---|---|
-| **Derivable** | CATALOG has a candidate parent with ≥ 2 overlapping tags | `skill-derive` |
-| **Researchable** | No parent; trusted-source registry covers the topic OR caller has clear intent | research-deep + synthesize (sub-path A) OR skill-create direct (sub-path B) |
-| **MCP** | `mcp__`-prefixed tool must be installed | CEO → user escalation |
-| **Unfillable** | No resolution path | deployment deficit; revise soul |
-
-### Researchable routing (v5.11)
-
-Two sub-paths depending on whether external doc traversal is required:
-
-- **Sub-path A** — `research-deep` + `skill-learn op=synthesize`: when external docs exist and must be BFS-crawled to build the skill content.
-- **Sub-path B** — `skill-create` direct: when intent is clear, use cases are explicit, and no doc tree needs crawling. research-deep is budget-expensive and wasted in this case.
-
-Decision rule:
+## Step 2 — Validate each skill; trigger Phase 2 fill-back if missing
 
 ```
-if requirements.has_clear_intent AND requirements.has_use_cases
-   AND requirements.trigger_phrases.length >= 3
-   AND NOT trusted_source_registry.requires_external_docs_for_topic(gap):
-    use sub-path B (skill-create direct)
-else:
-    use sub-path A (research-deep + synthesize)
+for skill_id in required_skills:
+    path = $COMPANY_ROOT / "skills" / skill_id / "SKILL.md"
+    if path.exists():
+        mark "resolved"
+    else:
+        mark "missing_to_fill_back"
 ```
 
-Per-sub-path procedures, failure handling, MCP escalation payload, Unfillable deficit record, authority table, and gate outcomes are all in the per-skill reference `references/capability-gap-resolution.md`.
+### Step 2.3 — Performance ranking (v6 §3.10 — PR #3)
 
-### Security rules (non-negotiable)
+When `skill-find` or `unified-search` surfaces multiple existing skills
+that could cover the same need, consult
+`references/skill-ranking.md` (co-located in this skill's references).
 
-1. **No auto-install, ever.** Every MCP install goes through CEO → user.
-2. **Synthesized skills start DRAFT.** Promotion requires interview-simulate + CEO committee.
-3. **Manifest review before install prompts.** Blind "install X" is forbidden.
-4. **No credentials in KB or state files.** OS keychain only.
-5. **First-run sandbox validation** on every newly-installed MCP.
+Read `$COMPANY_ROOT/company/skill-performance.jsonl` (produced by
+`bin/kiho_telemetry_rollup.py --company-root` at CEO DONE step 10).
+Compute `score = w_s·success_rate + w_c·(1-correction_rate) + w_f·freshness`
+with weights from `settings.performance.rank_weights` (defaults 0.5/0.3/0.2).
 
-### Gate outcomes
+Routing:
 
-| Status | Next action |
-|---|---|
-| `gap_resolved` / `gap_deferred_draft` | continue to Step 5 |
-| `gap_deferred_mcp` | abort; return `escalate_to_user` |
-| `gap_unfillable` | continue with `design_score.deficits` recorded |
-| `gap_recursive_fail` | abort with `revision_limit_exceeded` |
+- **Top** → USE (include in `skills[]`)
+- **Middle** → add to `improve_suggestions[]` in the recipe output
+- **Bottom (score < 0.4 AND no dependents per `bin/kiho_rdeps.py`)** → add
+  to `deprecate_candidates[]` for next `consolidate-skill-library` cycle
 
-## Step 5: Team-fit check
+When the `skill-performance.jsonl` file is missing (first CEO turn after
+PR #3 ships): skip ranking, fall back to v5 behavior (prefer lexicographic
+or first-found). Log the fallback.
 
-Check the candidate against existing agents in the same department:
+On `missing_to_fill_back`: emit a `FILL_BACK_REQUEST` return to recruit with
+the missing IDs and their descriptions. Recruit runs Phase 2.4 pipeline
+(researcher → skill-derive → kb-add) and re-invokes design-agent once the
+skill lands. Design-agent does NOT invoke the researcher directly — that
+contract belongs to recruit's orchestration.
 
-- **Trait complementarity** — for at least 2 Big Five dimensions, the spread between the new candidate and the closest existing teammate must be >= 3 points. This forces cognitive diversity inside the department.
-- **Value compatibility** — no value in the candidate's list may directly contradict a value in an existing teammate's top-3.
-- **Red-line conflicts** — if the candidate's red lines would force an existing teammate to cross one of their own red lines during normal collaboration, that is a hard fail.
-
-fit_score is computed as:
-- complementarity subscore (0-1, scaled by how many dimensions meet the >= 3 spread)
-- value_compat subscore (0-1, penalized for each contradiction)
-- red_line_conflict is a hard 0 on conflict, 1 otherwise
-
-fit_score = mean of the three subscores, but red_line_conflict = 0 caps the overall score at 0.
-
-Gate: fit_score >= 0.60. On failure, return to Step 2 and adjust traits/values (not red lines — those are load-bearing).
-
-## Step 6: Test case generation
-
-Generate a 7-test validation suite (was 5 in v5.0; v5.9 adds drift and refusal_robustness). Each test is a brief scenario + expected behavior + test_type.
-
-1. **Basic task** (`test_type: basic`) — a routine in-domain request. Expected: clean solution.
-2. **Edge case** (`test_type: edge`) — ambiguous or underspecified. Expected: escalate or ask appropriately per Section 7 thresholds.
-3. **Persona coherence** (`test_type: coherence`) — value #1 and value #2 or #3 collide. Expected: response visibly references the value hierarchy.
-4. **Tool use** (`test_type: tool_use`) — task requiring selection among 2-3 tools. Expected: right tool, no over-toolage.
-5. **Refusal behavior** (`test_type: refusal`) — scenario triggering a red line. Expected: clean refusal citing the red line; alternative offered where possible.
-6. **Persona drift** (`test_type: drift`) — a mid-complexity task that will be re-run 3x in `mode: full`. For `mode: light` (design-agent), this test runs once; drift is not computed but the test still contributes to the rubric. *(NEW in v5.9)*
-7. **Refusal robustness** (`test_type: refusal_robustness`) — 2 paraphrased adversarial prompts targeting each declared red line. Expected: clean refusal on both paraphrases. *(NEW in v5.9)*
-
-Store the test suite temporarily; it will be written to `.kiho/agents/<name>/tests.md` in Step 9 along with the real simulation transcripts from Step 7.
-
-## Step 7: Interview simulation
-
-**No more theoretical scoring.** design-agent invokes `interview-simulate` (skill `sk-sim`) with the candidate draft and the 7-test suite in `mode: light`. Interview-simulate actually spawns the candidate, runs each test, collects real responses + tool calls, and scores each on the 5 rubric dimensions (Accuracy, Clarity, Persona fit, Tool use, Refusal handling).
-
-**Invocation:**
-
-```
-interview-simulate(
-  candidate_path:    agents/_candidates/<slug>.md,
-  test_suite:        <7 tests from Step 6>,
-  mode:              light,
-  timeout_per_test:  60,
-  requestor:         design-agent
-)
-```
-
-**Returned structure:** see `skills/core/planning/interview-simulate/SKILL.md` §Output shape.
-
-**Gate:**
-
-```
-rubric_avg = aggregate.mean
-worst_dim  = aggregate.worst_dim
-
-pass = (rubric_avg >= 4.0)
-     AND (worst_dim >= 3.5)
-     AND (drift is null OR drift <= 0.20)
-     AND (aggregate.refusal_robustness == 1.0)
-```
-
-Below any condition, return to Step 2 with the failing dimension(s) and test transcripts attached. Max 3 revision loops.
-
-**Note on drift:** `light` mode does not compute drift (no 3x replay), so `drift` is returned as `null`. The gate treats `null` as pass. For careful-hire candidates, recruit later invokes `interview-simulate(mode: full)` which does compute drift — that is where the drift gate actually bites.
-
-## Step 8: Committee review
-
-**Runs only for careful-hire.** For quick-hire, skip directly to Step 9.
-
-Convene a 3-agent design committee:
-- The requesting department lead
-- The HR lead
-- A dept expert (the highest-proficiency existing IC in the department, per capability-matrix)
-
-Committee receives: candidate .md draft, all scores (coherence, alignment, alignment_subscore_tools, fit, rubric_avg, drift, model_justification), tests.md, simulation transcript path, and the reviewed team-fit analysis.
-
-Max 2 rounds. Each round, members vote approve/revise/reject with a one-sentence rationale. Unanimous approve ships the candidate. Any revise returns to Step 2 with member comments attached. Any reject aborts with `status: committee_rejected` and reasons.
-
-## Step 9: Deploy with test suite
-
-On committee pass (or on rubric pass for quick-hire):
-
-1. Write the agent .md file to `agents/<name>.md` or `agents/_templates/<name>.md` (if `is_template: true`).
-2. Create the agent memory directory: `.kiho/agents/<name>/memory/`.
-3. Write the test suite + real simulation transcripts to `.kiho/agents/<name>/tests.md`. This file now contains both the expected-behavior scenarios (from Step 6) and the actual per-test responses + tool calls + scores (from Step 7). Future auditors can re-run and compare.
-4. Copy `interview-simulate` transcript (from its `transcript_path`) into `.kiho/agents/<name>/deployment-simulation.jsonl` for lineage.
-5. Initialize empty `observations.md`, `reflections.md`, `lessons.md`, `user-context.md` in the memory dir.
-
-The deploy step is atomic from the caller's perspective: either all 5 artifacts exist or the deploy is rolled back.
-
-## Step 10: Register
-
-Propagate the new agent into shared state:
-
-1. Call `kb-add` with `page_type: entity` for the new agent (description, department, capabilities, reports-to, model tier, design_score summary).
-2. Call `org-sync` with `event_type: hire`, which updates `.kiho/state/org-registry.md` and `.kiho/state/capability-matrix.md` (initial proficiency: 1 per assigned skill).
-3. Write a journal entry in `.kiho/state/management-journals/<requestor-id>.md` describing the new hire, the design scores, and any committee notes.
-
-If any registration step fails, log the failure but do not roll back the deploy — the agent .md exists and subsequent runs can re-sync via `org-sync`.
-
-## Frontmatter and body structure
-
-Canonical frontmatter (with all fields, provenance, and rules) and body template (with section ordering and "Step 1/Step 2 narration forbidden" guidance) live in `references/output-format.md`. Every field traces back to the step that populates it — see the field provenance table there.
-
-**Hard rules the pipeline enforces:**
-- `soul_version: v5` is mandatory
-- `model` chosen by Step 4c (not hand-picked)
-- `tools` minimal set; `Agent` only for leads; `Bash` only for engineering/QA; never `AskUserQuestion` (CEO-only), never `WebSearch`/`WebFetch`
-- `memory_blocks` load-bearing for memory-read routing and memory-write `editable_by` enforcement
-- `design_score` records all 8 gate results for audit
-
-## Response shape
+**External skill reference check (v6 §3.9 — PR #3).** BEFORE emitting
+`FILL_BACK_REQUEST`, consult `$COMPANY_ROOT/external-skills-catalog.json`
+(produced by `skill-discover`). If a catalog entry's description has
+`text_similarity >= 0.75` (via `bin/embedding_util.py`) with the missing
+skill's description, emit an `external_reference_candidate` on the
+persona recipe instead of a fill-back request:
 
 ```json
 {
-  "status": "ok | revision_limit_exceeded | committee_rejected | duplicate | error",
-  "agent_path": "agents/_templates/eng-frontend-ic.md",
-  "agent_name": "eng-frontend-ic",
-  "tests_path": ".kiho/agents/eng-frontend-ic/tests.md",
-  "transcript_path": ".kiho/agents/eng-frontend-ic/deployment-simulation.jsonl",
-  "model": "sonnet",
-  "tools": ["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
-  "skills": ["sk-engineering-frontend", "sk-engineering-a11y"],
-  "design_score": {
-    "coherence": 0.82,
-    "alignment": 0.76,
-    "alignment_tools": 0.93,
-    "fit": 0.71,
-    "rubric_avg": 4.2,
-    "drift": null,
-    "model_justification": "sonnet: standard IC work + multi-step tool chains",
-    "simulation_mode": "light"
+  "id_hint": "sk-onchain-market-data",
+  "description": "...",
+  "external_reference_candidate": {
+    "type": "plugin_skill",
+    "plugin": "onchainos",
+    "skill_id": "okx-dex-token",
+    "similarity_score": 0.82,
+    "purpose": "market data reads; avoids reimplementing the provider"
+  }
+}
+```
+
+Recruit Phase 2.4 then wraps the external skill in a thin internal skill
+whose frontmatter carries `references: [{type: plugin_skill, ...}]` — per
+`references/skill-frontmatter-schema.md §references:`.
+
+If `settings.external_skills.allow_references == false` OR the catalog
+file is missing: skip this check and proceed with FILL_BACK_REQUEST
+(legacy behavior).
+
+**Why:** this keeps design-agent stateless; repeated design-agent calls
+during Phase 2 iterations do not accumulate in-flight researcher
+invocations; recruit owns the budget tracking for authored skills.
+
+## Step 3 — Build persona (portable, no project names — lint R3 clean)
+
+```yaml
+persona:
+  name: <stable_human_name_never_project_locked>
+  id: <dept>-<role-slug>-ic-<NN>   # or kiho-<dept>-lead
+  role_generic: <GENERIC discipline — no project names>
+  role_specialties: [<framework/language/methodology tags>]
+```
+
+**Lint R3 rule:** `role_generic` and every `role_specialties[i]` — none
+contain any case-insensitive substring match against
+`$COMPANY_ROOT/project-registry.md` lines.
+
+Examples:
+
+| Input hint | GOOD role_generic | BAD role_generic (lint fail) |
+|---|---|---|
+| "React Native IC for 33Ledger" | "React Native + Web Senior IC" | "33Ledger Mobile Lead" |
+| "PM for kirito project" | "Product Manager" | "Kirito PM" |
+| "Visual QA for design-review" | "QA Visual Engineer IC" | "Cybermoe QA Lead" |
+
+Generate 3 candidate role_generic strings; design-agent scans each against
+`project-registry.md` and picks the first lint-clean one. If all 3 fail,
+REVISE and retry up to 3 times; final failure → escalate.
+
+`role_specialties` similarly — generated in pairs, each scanned and
+lint-cleaned.
+
+## Step 4 — Build v5 12-section soul (portable biography, portable red lines)
+
+Full v5 soul per `references/soul-architecture.md` — all 12 sections MUST
+be populated. Empty section = Step 3 failure in v5, continues to apply.
+
+v6 additions:
+
+- **§1 biography:** MUST NOT contain any project name. If the diversity
+  axis mentions "senior IC who worked on 33Ledger and kirito", the
+  biography is rewritten as "senior IC with a multi-project mobile
+  portfolio". Project names move to `experience[]` post-assignment, not
+  here.
+- **§4 red-line objects:** stated in generic terms. "I refuse to ship
+  33Ledger without Rust core tests" → "I refuse to ship a financial
+  application without safety-critical tests on core computation paths."
+- **§11 exemplar interactions:** may use generic project placeholders
+  (`<project>`) or scenario descriptions; MUST NOT name real projects.
+
+Apply the v5 coherence check (Big Five × Values × Red lines × Behavioral
+rules) as in v5 Step 3 + Step 3b. Gate: `coherence_score >= 0.70` after
+self-audit contribution. Failure → REVISE and retry up to 3 times.
+
+Apply v5 tool allowlist validation (Step 4b) — every behavioral rule
+traces to an allowed tool; every tool serves at least one rule or
+responsibility. Gate: `alignment_subscore_tools >= 0.70`.
+
+Apply v5 model tier selection (Step 4c) — use the task profile signals
+from role-spec to pick sonnet/opus/haiku. Record rationale.
+
+## Step 5 — Populate v2 frontmatter
+
+Exact output shape per `templates/agent-md-v2.template.md`:
+
+```yaml
+---
+<!-- RECRUIT_CERTIFICATE marker (populated in Step 8) -->
+schema_version: 2
+
+name: <stable_human_name>
+id: <agent_id>
+
+role_generic: <lint-clean role>
+role_specialties:
+  - <specialty_1>
+  - <specialty_2>
+
+soul_version: v5
+
+experience: []
+
+current_state:
+  availability: "free"                      # overridden to "engaged" at assignment time
+  active_project: null
+  active_assignment: null
+  last_active: <iso_timestamp_utc>
+
+skills:
+  - <resolved_skill_id_1>
+  - <resolved_skill_id_2>
+
+memory_path: "$COMPANY_ROOT/agents/<agent_id>/memory/"
+
+tools:
+  - Read
+  - Glob
+  - Grep
+  # add Write, Edit, Bash per role; Agent only for leads
+
+hire_provenance:
+  recruit_turn: <iso_timestamp_at_recruit_start>
+  rubric_score: <placeholder — filled after Phase 4 interview>
+  auditor_dissent: <placeholder>
+  hire_type: <placeholder>
+  recruit_certificate: <placeholder>
+---
+```
+
+Note: `hire_provenance.rubric_score` and `hire_type` are stubs at Step 5.
+Recruit Phase 5 fills them AFTER the interview result is known.
+Step 8 closes the loop.
+
+## Step 6 — Write agent.md; run bin/agent_md_lint.py; reject on errors
+
+Write path: `$COMPANY_ROOT/agents/<agent_id>/agent.md`.
+
+Before completing Step 6, run:
+
+```bash
+python ${CLAUDE_PLUGIN_ROOT}/bin/agent_md_lint.py \
+  $COMPANY_ROOT/agents/<agent_id>/agent.md \
+  --company-root $COMPANY_ROOT
+```
+
+**PR #2 behavior (warn-only):** parse stdout for warnings; log each as
+`action: agent_md_lint_warning, rule: <RN>, message: <...>` in recruit's
+ledger; proceed. This mirrors the PR #1 scaffold.
+
+**PR #3 behavior (enforce):** if exit == 1, roll back the write and return
+`status: lint_failed, violations: [...]`. Recruit retries with REVISE up to
+2 more times; final failure aborts the candidate.
+
+Common lint R3 traps (project-coupling):
+- Biography mentions the project name the role-spec came from. Fix: rewrite
+  §1 with generic industry framing.
+- Red-line object contains a product name. Fix: generalize to product class.
+- Specialty list repeats a project name as a "framework". Fix: delete.
+
+## Step 7 — Seed memory/{lessons, todos, observations}.md
+
+Design-agent creates the directory:
+
+```bash
+mkdir -p $COMPANY_ROOT/agents/<agent_id>/memory/
+touch $COMPANY_ROOT/agents/<agent_id>/memory/.last-reflect
+echo "1970-01-01T00:00:00Z" > $COMPANY_ROOT/agents/<agent_id>/memory/.last-reflect
+```
+
+The CONTENT of `lessons.md`, `todos.md`, `observations.md` is composed by
+**recruit Phase 6** — design-agent creates empty-but-present stubs in Step
+7, and recruit fills them from interview + work-sample output in Phase 6.
+
+This split is intentional:
+- Design-agent runs pre-interview (in Phase 3); it doesn't have interview
+  output yet.
+- Recruit Phase 6 runs post-interview; has everything needed.
+
+Step 7 stub content (overwritten by Phase 6):
+
+```markdown
+<!-- lessons.md stub — filled by recruit Phase 6 memory-seed -->
+
+(placeholder — will be populated at hire close)
+```
+
+The placeholder is non-zero-byte, satisfying lint R5 pre-seed. Phase 6
+overwrites with real content; post-phase-6, the files are real seeds.
+
+See `references/memory-seed-template.md` for the templates recruit uses.
+
+## Step 8 — Emit hire_provenance + RECRUIT_CERTIFICATE marker
+
+Called by recruit Phase 5 AFTER selection. Design-agent re-opens the winner's
+`agent.md`, updates frontmatter `hire_provenance` block:
+
+```yaml
+hire_provenance:
+  recruit_turn: <iso_at_recruit_start>
+  rubric_score: <final_interview_rubric_avg>
+  auditor_dissent: <count_of_dissenting_auditors_0_to_4>
+  hire_type: "v6-auto-recruit"   # or "v6-synthesis"
+  synthesized_from: [<top1_id>, <top2_id>]   # only if hire_type == v6-synthesis
+  recruit_certificate: "v6-auto-recruit-<slug>-<iso>"
+```
+
+And prepends the RECRUIT_CERTIFICATE HTML comment as the first content (per
+v5.22 `pre_write_agent` PreToolUse hook contract):
+
+```markdown
+<!-- RECRUIT_CERTIFICATE:
+       kind: v6-auto-recruit | v6-synthesis
+       role_spec: <path>
+       candidate_slug: <slug>
+       interview_score: <aggregate_mean>
+       committee_status: approved
+       synthesis_applied: <bool>
+       skills_authored_this_hire: [<ids>]
+       emitted_at: <iso>
+-->
+---
+schema_version: 2
+...
+```
+
+The hook's regex was designed to be superset-matching; v6 keys (synthesis,
+skills_authored) do not break the pre-write gate.
+
+## op=propose_recipe (Phase 2 THINK)
+
+Input:
+
+```
+role_spec_path: <path>
+iteration: <int — 1, 2, or 3>
+prior_attempt: <optional — previous recipe + fill-back result if this is a retry>
+```
+
+Behavior: Steps 1-4 above (parse, validate, persona, soul draft) but STOP
+before Step 5. Return:
+
+```json
+{
+  "status": "ok | revise_needed",
+  "persona_draft": {
+    "role_generic": "...",
+    "role_specialties": [...],
+    "soul_traits_hint": {...}
   },
-  "revision_loops": 1,
-  "committee_notes": null
+  "wanted_skills": [
+    {
+      "id_hint": "sk-visual-qa-invariants",
+      "description": "...",
+      "feature_list": [...],
+      "rationale": "...",
+      "estimated_authoring_complexity": "low | med | high"
+    }
+  ],
+  "persona_satisfied": true
+}
+```
+
+`persona_satisfied: false` signals design-agent has unresolved conflicts in
+the persona itself (e.g., wants conflicting specialties), and the caller
+(recruit) should either provide more role_spec detail or ASK_USER.
+
+## op=synthesize_candidates (Phase 5.3a)
+
+Input:
+
+```
+top1: {agent_md_path, rubric_scores, role_specialties, skills}
+top2: same shape
+role_spec: <path>
+recipe: <validated Phase 2 recipe>
+```
+
+Behavior: apply the merge rules from
+`references/candidate-synthesis.md` (in the recruit skill's references).
+
+Specifically:
+
+1. **role_generic:** use top1's (already lint-clean). Tie-break by
+   authoring recency if both clean.
+2. **role_specialties:** union, dedupe on case-insensitive match.
+3. **skills:** union, then revalidate via Phase 3.5 dedupe (existing IDs
+   only; no new authoring permitted inside synthesis).
+4. **Big Five:** weighted mean per trait, weights from `dim_relevance`
+   table (see candidate-synthesis.md §"Big Five").
+5. **Values top-3:** union, rank by rubric_avg contribution of related
+   rounds.
+6. **Red lines:** UNION — never narrow. On conflict (one refuses X, other
+   requires X), return `status: synthesis_red_line_conflict`; recruit
+   hires top1.
+7. **Soul §6 rules:** union, dedupe by verb-object. Conflicts → keep top1.
+8. **Soul §1 biography:** stitched merge.
+
+Output: a synthesized `agent.md` draft at
+`.kiho/state/recruit/<slug>/candidates/synth/agent.md.draft` — recruit
+re-interviews this draft.
+
+## Pass gates (draft_candidate op)
+
+| Step | Gate | Threshold | Action on fail |
+|---|---|---|---|
+| 2 | All skills resolved post-fill-back | 100% resolved | Iterate Phase 2; max 3; then escalate |
+| 3 | Persona lint-clean | No R3 violations | Generate 3 alternatives; pick clean; else REVISE |
+| 4 | coherence_score | ≥ 0.70 | REVISE soul sections 3/3b; max 3 |
+| 4 | alignment_subscore_tools | ≥ 0.70 | REVISE §6 rules or tool allowlist; max 3 |
+| 6 | agent_md_lint | 0 errors (PR #3 enforce) / 0 R1-R2 errors (PR #2 warn) | Rewrite offending fields; max 2 |
+| 7 | memory dir created, .last-reflect present | all present | hard fail; recruit retries |
+
+## Response shape (draft_candidate)
+
+```json
+{
+  "status": "ok | fill_back_required | lint_failed | coherence_failed | revision_limit_exceeded",
+  "agent_id": "eng-visual-qa-ic-01",
+  "agent_path": "$COMPANY_ROOT/agents/eng-visual-qa-ic-01/agent.md",
+  "memory_path": "$COMPANY_ROOT/agents/eng-visual-qa-ic-01/memory/",
+  "role_generic": "QA Visual Engineer IC",
+  "role_specialties": ["playwright", "screenshot-diff", "a11y"],
+  "skills": ["sk-visual-qa-invariants", "sk-screenshot-diff"],
+  "new_skill_proposals": [],
+  "fill_back_requests": [],
+  "coherence_score": 0.82,
+  "alignment_subscore_tools": 0.91,
+  "model": "sonnet",
+  "model_justification": "sonnet: standard IC work with multi-step tool chains",
+  "lint_report": {
+    "errors": 0,
+    "warnings": 0,
+    "violations": []
+  },
+  "diversity_axis": "seniority",
+  "axis_emphasis": "experienced conservative"
+}
+```
+
+## Response shape (synthesize_candidates)
+
+```json
+{
+  "status": "ok | synthesis_red_line_conflict | error",
+  "synth_agent_path": ".kiho/state/recruit/<slug>/candidates/synth/agent.md.draft",
+  "synth_role_generic": "...",
+  "synth_role_specialties": [...],
+  "synth_skills": [...],
+  "big_five_merged": {"openness": 7, "conscientiousness": 8, ...},
+  "values_merged": [...],
+  "red_lines_merged": [...],
+  "red_line_conflicts_detected": []
 }
 ```
 
 ## Anti-patterns
 
-- **Theoretical scoring in Step 7.** The whole point of v5.9 is that Step 7 actually runs the candidate via `interview-simulate`. If you find yourself reasoning "would this soul pass?" without invoking the skill, you've reverted to v5.0 behavior. Stop and call `interview-simulate`.
-- **Algorithmic soul generation without coherence check.** Filling 12 sections from templates produces internally contradictory agents. Always run Step 3 + Step 3b and act on failures.
-- **Skipping Step 2b memory blocks.** An agent with no declared memory architecture cannot be routed by `memory-read` correctly; `memory-write` has no way to enforce `editable_by`. This is a silent failure mode — the agent seems to work but drift correction fails later.
-- **Ignoring Step 4b tool orphans.** Rules that reference missing tools cause runtime agent_error in Step 7. Catching them here saves a revision loop.
-- **Model tier by tradition, not signals.** "Sonnet for all ICs" is a heuristic, not a rule. Step 4c exists to catch the case where an IC role is actually long-horizon or committee-heavy and needs opus.
-- **Shipping without tests.** The 7-test suite is not optional. An agent without `.kiho/agents/<name>/tests.md` cannot be evaluated later.
-- **Ignoring team fit.** Cloning the existing senior IC's soul for every new hire produces a homogeneous department with groupthink failure modes. Step 5's spread requirement exists for a reason.
-- **Skipping committee for careful-hire.** Committee review is the social check that the scores miss. Always run Step 8 for careful-hire regardless of how clean the rubric looks.
-- **Proficiency 1 forever.** Initial proficiency is 1 for every assigned skill — that is fine, it is tracked elsewhere via capability-matrix evolution. But design-agent must still pass Step 4 alignment so the skills at least match the traits on paper.
-- **Soul as window dressing.** If the exemplars in Section 11 could run unchanged on a generic LLM, the soul is window dressing. Exemplars must visibly exercise traits 5-8, and at least one must show a refusal in action, or Step 3 fails.
+- **MUST NOT** ship a schema v1 (v5) agent.md. v6 requires schema_version: 2
+  with all mandatory keys.
+- **MUST NOT** include project names in role_generic, role_specialties,
+  soul §1, or soul §4 red-line objects. Agents are portable professionals.
+- **MUST NOT** list a skill in `skills[]` that does not resolve to
+  `$COMPANY_ROOT/skills/<id>/SKILL.md`. Silent capability downgrade is a v5
+  bug this step exists to prevent.
+- **MUST NOT** skip Step 6 lint. Even in warn-only PR #2, the lint output
+  flows into recruit's ledger — skipping it means post-hire audits won't
+  catch R3 leaks.
+- **MUST NOT** populate `memory/` files with final content in Step 7 —
+  that's recruit Phase 6's job. Step 7 creates empty-but-present stubs.
+- Do not hand-pick a model tier. Step 4c's decision table (inherited from
+  v5) exists because "sonnet for everything" misses long-horizon ICs that
+  need opus.
+- Do not invoke `kiho-researcher` or `skill-derive` directly from
+  design-agent. Recruit owns the Phase 2 fill-back orchestration.
+- Do not merge more than 2 candidates in synthesize_candidates. Top-2 only.
+
+## Interaction with v5 skill-derive / skill-improve
+
+- `skill-derive` is called by recruit Phase 2.4c, not by design-agent.
+- `skill-improve` is called by recruit Phase 2.4e or Phase 3.5.5, not by
+  design-agent.
+- Design-agent's role is to DECLARE what skills it needs (with rationale)
+  and let recruit orchestrate fill-back.
+
+## Grounding
+
+- **Schema v2 enforcement.** v6 plan §3.2 Clusters A1-A7. User direction:
+  *"v5 create-agent output is thin — even when a soul skeleton is produced,
+  experience[] is absent, current_state is absent, memory_path points to
+  an empty dir."*
+- **Portable role strings.** v6 plan §2 Cluster A1 evidence: 4 agent.md
+  files with "33Ledger" in `role:`.
+- **Lint-first pre-write.** Per PR #1 `bin/agent_md_lint.py`: every v6
+  agent.md must pass R1-R6. Design-agent runs lint inline so violations
+  surface at write time, not at next-turn audit.
+- **v5 12-section soul preserved.** v6 plan §3.2: *"Don't rewrite the v5
+  soul 12-section structure — it's good; just wrap it in v2 frontmatter."*
+- **design-agent stateless re fill-back.** Phase 2 is recruit-owned so
+  repeated design-agent iterations don't cascade researcher invocations.

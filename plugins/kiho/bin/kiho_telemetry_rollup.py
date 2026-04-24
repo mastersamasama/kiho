@@ -79,6 +79,9 @@ DEFAULT_OUT = PLUGIN_ROOT / "_meta-runtime" / "skill-health.jsonl"
 DEFAULT_CYCLES_JSONL = PLUGIN_ROOT / "_meta-runtime" / "cycle-events.jsonl"
 DEFAULT_CYCLES_OUT = PLUGIN_ROOT / "_meta-runtime" / "cycle-health.jsonl"
 
+# v6 §3.10 — cross-project performance rollup lives at the company tier.
+DEFAULT_PERFORMANCE_WINDOW_DAYS = 30
+
 TERMINAL_STATUSES = frozenset({
     "closed-success", "closed-failure", "blocked", "cancelled", "paused",
 })
@@ -240,6 +243,113 @@ def cycle_rollup(
     return cycle_rows, template_rows
 
 
+def performance_rollup(
+    rows: list[dict],
+    window_days: int = DEFAULT_PERFORMANCE_WINDOW_DAYS,
+) -> list[dict]:
+    """Aggregate skill-invocations.jsonl rows across ALL projects into the
+    company-tier `skill-performance.jsonl` format.
+
+    Row schema (v6 §3.10):
+
+        {
+          "skill_id": "...",
+          "window_days": 30,
+          "invocations": <int>,
+          "success_rate": <float 0..1>,
+          "median_duration_ms": <int>,
+          "user_correction_rate": <float 0..1>,
+          "last_invoked": "<iso>",
+          "generated_at": "<iso>"
+        }
+
+    This feeds `design-agent` Phase 2.3 skill ranking.
+    """
+    now = _dt.datetime.now(_dt.timezone.utc)
+    cutoff = now - _dt.timedelta(days=window_days)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    by_skill: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        sid = r.get("skill_id")
+        if not sid:
+            continue
+        ts = r.get("ts")
+        if ts:
+            try:
+                tsd = _dt.datetime.strptime(str(ts).replace("Z", "+00:00"),
+                                            "%Y-%m-%dT%H:%M:%S%z")
+                if tsd < cutoff:
+                    continue
+            except (ValueError, TypeError):
+                pass  # Keep it; can't parse, err on inclusion
+        by_skill[sid].append(r)
+
+    out: list[dict] = []
+    for sid, items in sorted(by_skill.items()):
+        successes = sum(1 for r in items if r.get("success") is True)
+        invocations = len(items)
+        success_rate = successes / invocations if invocations else 0.0
+        corrections = sum(1 for r in items if r.get("user_correction") is True)
+        correction_rate = corrections / invocations if invocations else 0.0
+        durations = sorted(int(r.get("duration_ms") or 0) for r in items)
+        median_dur = durations[len(durations) // 2] if durations else 0
+        last_invoked = max((str(r.get("ts") or "") for r in items), default=None)
+        out.append({
+            "generated_at": now_iso,
+            "skill_id": sid,
+            "window_days": window_days,
+            "invocations": invocations,
+            "success_rate": round(success_rate, 3),
+            "median_duration_ms": int(median_dur),
+            "user_correction_rate": round(correction_rate, 3),
+            "last_invoked": last_invoked,
+        })
+    return out
+
+
+def collect_project_invocations(company_root: Path) -> list[dict]:
+    """Walk $CLAUDE_PROJECTS (or env) + known project registries for
+    `.kiho/state/skill-invocations.jsonl`. Return merged rows."""
+    rows: list[dict] = []
+    search_roots: list[Path] = []
+
+    # Project registry at company root
+    registry = company_root / "project-registry.md"
+    if registry.is_file():
+        # No project path info in registry; we have to scan filesystems.
+        pass
+
+    # env-based project search roots
+    import os as _os
+    env_projects = _os.environ.get("CLAUDE_PROJECTS")
+    if env_projects:
+        for part in env_projects.split(_os.pathsep):
+            p = Path(part).expanduser()
+            if p.is_dir():
+                search_roots.append(p)
+
+    # Common default locations
+    for cand in (Path.home() / "Projects", Path.cwd()):
+        if cand.is_dir() and cand not in search_roots:
+            search_roots.append(cand)
+
+    seen_files: set[Path] = set()
+    for root in search_roots:
+        # Shallow + one level deep glob
+        for pattern in ("*/.kiho/state/skill-invocations.jsonl",
+                        "*/*/.kiho/state/skill-invocations.jsonl"):
+            try:
+                for m in root.glob(pattern):
+                    if m in seen_files:
+                        continue
+                    seen_files.add(m)
+                    rows.extend(read_jsonl(m))
+            except OSError:
+                continue
+    return rows
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
         description="Roll up skill + cycle telemetry into health stats.",
@@ -273,6 +383,12 @@ def main(argv: list[str]) -> int:
                    help="Most-recent invocations per skill considered.")
     p.add_argument("--min-invocations", type=int, default=5,
                    help="Min invocations before a skill can be flagged.")
+    # v6 §3.10 — cross-project performance rollup
+    p.add_argument("--company-root", default=None,
+                   help="v6 §3.10: emit $COMPANY_ROOT/company/skill-performance.jsonl "
+                        "aggregated across every project's skill-invocations.jsonl.")
+    p.add_argument("--performance-window-days", type=int, default=DEFAULT_PERFORMANCE_WINDOW_DAYS,
+                   help="Window (days) for the company-tier performance rollup.")
 
     try:
         args = p.parse_args(argv[1:])
@@ -317,6 +433,28 @@ def main(argv: list[str]) -> int:
                 "skills_total": len(rollup_rows),
                 "skills_flagged_for_evolve": len(flagged),
                 "flagged_skill_ids": [r["skill_id"] for r in flagged],
+            }
+
+        # v6 §3.10 — company-tier cross-project performance rollup
+        if args.company_root:
+            cr = Path(args.company_root).expanduser().resolve()
+            perf_rows_src = collect_project_invocations(cr)
+            # Also include rows from the explicit --invocations-jsonl if present
+            if invocations_path is not None and invocations_path.is_file():
+                perf_rows_src.extend(read_jsonl(invocations_path))
+            perf_out_rows = performance_rollup(
+                perf_rows_src, window_days=args.performance_window_days,
+            )
+            perf_out = cr / "company" / "skill-performance.jsonl"
+            perf_out.parent.mkdir(parents=True, exist_ok=True)
+            with perf_out.open("w", encoding="utf-8") as fp:
+                for r in perf_out_rows:
+                    fp.write(json.dumps(r, ensure_ascii=False) + "\n")
+            report["performance"] = {
+                "out": str(perf_out),
+                "skills_total": len(perf_out_rows),
+                "window_days": args.performance_window_days,
+                "source_rows_aggregated": len(perf_rows_src),
             }
 
         if cycles_path.is_file():

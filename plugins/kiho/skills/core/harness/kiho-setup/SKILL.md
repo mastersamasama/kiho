@@ -1,7 +1,7 @@
 ---
 name: kiho-setup
-description: Use this skill on first run of kiho or when the user explicitly asks to set up, reinitialize, reset, or repair kiho. Also use when the kiho entry skill detects that config.toml has an empty company_root. Scaffolds both the project-level .kiho/ tree and the company-level $COMPANY_ROOT tree from templates, and writes the user's chosen company path back to config.toml. Idempotent — safe to re-run; existing files are preserved.
-argument-hint: "(no arguments)"
+description: Use this skill on first run of kiho or when the user explicitly asks to set up, reinitialize, reset, or repair kiho. Also use when the kiho entry skill detects that config.toml has an empty company_root, or when CEO INITIALIZE step 1 detects that $COMPANY_ROOT/settings.md, project-registry.md, company/wiki/index.md, or skills/INDEX.md is missing and needs auto-scaffolding. Scaffolds both the project-level .kiho/ tree and the company-level $COMPANY_ROOT tree from templates, and writes the user's chosen company path back to config.toml. v6 adds targeted `op=scaffold-settings | scaffold-project-registry | scaffold-company-index | scaffold-skills-index` sub-operations callable inline by the CEO when only a specific file is missing. Idempotent — safe to re-run; existing files are preserved.
+argument-hint: "op=<scaffold-settings|scaffold-project-registry|scaffold-company-index|scaffold-skills-index|full> (no-arg default: full)"
 metadata:
   trust-tier: T3
   kiho:
@@ -17,7 +17,75 @@ First-run scaffolder for kiho. Ensures a valid `company_root`, then idempotently
 
 kiho has two knowledge-base tiers: a **project KB** under each project's `.kiho/` and a **company KB** under `$COMPANY_ROOT/` (user-global). This skill creates both trees from templates and records the user's company-root choice in `config.toml` (migrated from YAML in v5.19.3).
 
-## Procedure
+## Operations (v6)
+
+| op | Purpose | Called from |
+|---|---|---|
+| `full` (default, no arg) | Full first-run scaffold: config.toml resolve + company tree + project tree | user `/kiho` first run, `kiho-init` detects empty company_root |
+| `scaffold-settings` | Ensure `$COMPANY_ROOT/settings.md` exists; write from `templates/company-settings.template.md` if absent | CEO INITIALIZE step 1 |
+| `scaffold-project-registry` | Ensure `$COMPANY_ROOT/project-registry.md` exists; seed detected projects from `$CLAUDE_PROJECTS/**/.kiho/` grep | CEO INITIALIZE step 1 |
+| `scaffold-company-index` | Ensure `$COMPANY_ROOT/company/wiki/index.md` exists as empty skeleton | CEO INITIALIZE step 1 |
+| `scaffold-skills-index` | Ensure `$COMPANY_ROOT/skills/INDEX.md` exists as empty skeleton | CEO INITIALIZE step 1 |
+
+Each targeted op is **non-destructive**: if the file already exists and is non-empty it returns `status: ok, action: skipped` without touching it. Safe to invoke at every CEO INITIALIZE — the cost is a single stat + optional write.
+
+### op=scaffold-settings
+
+1. Check `$COMPANY_ROOT/settings.md` existence + non-empty.
+2. If missing or 0 bytes: read `${CLAUDE_PLUGIN_ROOT}/templates/company-settings.template.md`, substitute `{{company_root}}` and `{{iso_timestamp}}`, write to `$COMPANY_ROOT/settings.md`.
+3. Return `{status: ok, action: created|skipped, path}`.
+
+### op=scaffold-project-registry
+
+1. Check `$COMPANY_ROOT/project-registry.md` existence + non-empty.
+2. If missing: read `${CLAUDE_PLUGIN_ROOT}/templates/project-registry.template.md` as the base shell.
+3. Project seeding: scan `$CLAUDE_PROJECTS` (if set; fallback `~/Projects` + current-project parent) for directories containing a `.kiho/` subdirectory. Each detected project's basename is appended as a new `- <lowercase-slug>` line under the "Seeded projects:" section. Deduplicate. Cap at 20 entries (more = user editable later).
+4. Write. Return `{status: ok, action: created|skipped, path, detected_projects: [...]}`.
+
+Tolerant of missing `$CLAUDE_PROJECTS` — falls back to the bare template.
+
+### op=scaffold-company-index
+
+1. Check `$COMPANY_ROOT/company/wiki/index.md` existence + non-empty.
+2. If missing: ensure parent dir exists (`mkdir -p`), then write the empty-shell content:
+
+```markdown
+---
+generated_at: {{iso_timestamp}}
+generated_by: kiho-setup
+entry_count: 0
+---
+
+# Company wiki — index
+
+(empty — CEO DONE scope-promote sweep + consolidate-company-kb will populate)
+```
+
+3. Return receipt.
+
+### op=scaffold-skills-index
+
+1. Check `$COMPANY_ROOT/skills/INDEX.md` existence + non-empty.
+2. If missing: ensure `$COMPANY_ROOT/skills/` exists, then write:
+
+```markdown
+---
+generated_at: {{iso_timestamp}}
+generated_by: kiho-setup
+entry_count: 0
+---
+
+# Company skill library — INDEX
+
+(empty — recruit Phase 2 authoring + skill-derive + consolidate-skill-library populate rows)
+
+| skill_id | description | trust-tier | lifecycle | invocations | last_invoked |
+|---|---|---|---|---|---|
+```
+
+3. Return receipt.
+
+## Procedure (op=full)
 
 ### 1. Resolve `company_root`
 

@@ -1,520 +1,632 @@
 ---
 name: recruit
-description: Tiered HR recruitment protocol for creating new agents. Two tiers — quick-hire (2 heterogeneous candidates, mini-committee, fast) and careful-hire (headcount x 4 candidates, 6 interview rounds via interview-simulate(mode=full), 4 auditors, full hiring committee, 8-round persona-stability probe). Produces a role-spec planner before any candidate is drafted, enforces per-dimension hard rubric thresholds, mandates heterogeneous candidate generation, and adds a work-sample dimension grounded in Schmidt-Hunter validity research. Inputs include department, role description, headcount, and tier. Requires an evaluation rubric (creates one via mini-committee if none exists). Delegates per-candidate spawn-and-score to the interview-simulate skill; recruit owns role-spec authorship, candidate pool generation with diversity enforcement, auditor review, and hiring committee convening. Use when a department leader needs more capacity, when the CEO approves a new role, or when HR initiates headcount expansion. Triggers on "recruit", "hire agent", "need more ICs", "add team member", "expand team".
+description: Unified v6 recruitment protocol — one flow, 4 candidates always. Produces a role-spec stub, runs a design-validate-fill-validate loop that authors any missing skills BEFORE agents are drafted, emits 4 diverse candidates, reconciles their proposed skill lists across the company library (dedupe, deprecate, improve, author), interviews all 4 via interview-simulate, selects a winner with optional synthesis when top-2 are complementary, and seeds the hired agent's memory with interview-derived lessons/todos/observations. Replaces v5 quick-hire / careful-hire split. Use when a capability gap is detected (RACI fail on a plan item OR mid-wave CEO capability gap), when HR-lead is invoked with `op=auto-recruit`, or when a department needs new capacity. Governed by `settings.recruit.*` — when `auto_trigger_on_gap` is false falls back to v5 ASK_USER on gap.
 metadata:
   trust-tier: T2
-  version: 2.1.0
+  version: 3.0.0
   lifecycle: active
   kiho:
     capability: create
-    topic_tags: [hiring]
-    data_classes: ["recruit-role-specs", "agent-md", "agent-souls"]
+    topic_tags: [hiring, gap-healing, skill-authoring]
+    data_classes: ["recruit-role-specs", "agent-md", "agent-souls", "skill-definitions"]
+    storage_fit:
+      reads: ["$COMPANY_ROOT/settings.md", "$COMPANY_ROOT/skills/**", "$COMPANY_ROOT/skills/INDEX.md", "$COMPANY_ROOT/project-registry.md", "<project>/.kiho/state/capability-matrix.md"]
+      writes: ["$COMPANY_ROOT/agents/<id>/agent.md", "$COMPANY_ROOT/agents/<id>/memory/{lessons,todos,observations}.md", "$COMPANY_ROOT/skills/<id>/SKILL.md (via skill-derive)", ".kiho/state/recruit/<slug>/role-spec.md"]
 ---
-# recruit
+# recruit (v6)
 
-The agent recruitment protocol. Matches hiring rigor to role criticality: quick-hire for known IC roles, careful-hire for leads and novel positions. Grounded in industrial-organizational psychology (Schmidt-Hunter 1998) and 2024-2026 multi-agent harness research (Anthropic, MAST taxonomy).
+The **universal gap-healing reflex**. When the CEO encounters a capability no
+current agent can cover, this skill produces a role-specification, iteratively
+designs an ideal agent persona while authoring any missing skills, drafts four
+diverse candidates, reconciles their skill proposals against the company
+library, interviews all four, and hires one (or a synthesis of the top two)
+with seeded memory.
 
-> **v5.21 cycle-aware.** This skill is invoked atomically for known-domain hires (existing role spec) AND as the `recruit` phase entry in `references/cycle-templates/talent-acquisition.toml` for novel-domain hires (where discovery + decision + research-deep upstream produce the role spec). When run from cycle-runner, the cycle's `index.toml` carries domain context; recruit's outputs (cycle_id, winner) write back into `index.recruit.*`. The atomic invocation path remains unchanged.
-
-v5.9 refactor: the 6 interview rounds are a *test suite template* (see `references/interview-rounds.md`) that recruit compiles and passes to `interview-simulate(mode: full)`. Recruit no longer runs inline spawn-and-score loops; it owns org-level decisions (role-spec authorship, pool generation, auditor review, committee) and delegates per-candidate simulation to the shared engine.
+v6 collapses the v5 `quick-hire` / `careful-hire` split. There is one flow.
+The hard minimum is **four candidates, always**. Governed by
+`$COMPANY_ROOT/settings.md` `[recruit]` and plugin `config.toml` `[recruit]`
+fallback.
 
 ## When to use
 
 Invoke this skill when:
 
-- A department leader requests additional capacity (new IC, specialist, lead)
-- The CEO approves a new role during a kiho committee decision
-- HR initiates headcount expansion in response to workload telemetry
-- A careful-hire reassessment is triggered (promotion to lead, post-drift reshuffle)
-- A department template needs refreshing and a new template-grade agent must be drafted
+- `kiho-ceo` INITIALIZE step 11 detects a RACI gap AND
+  `settings.recruit.auto_trigger_on_gap == true`
+- `kiho-ceo` LOOP step b/c enumerates `required_skills` and at least one is
+  absent from `$COMPANY_ROOT/skills/`
+- `kiho-hr-lead` is invoked with `op=auto-recruit` and a capability brief
+- A department leader files a documented headcount request
 
 Do NOT invoke this skill when:
 
-- A skill (not an agent) is needed — use `skill-create` or `skill-derive` instead
-- An existing agent needs behavioral changes — use `skill-improve` or `soul-apply-override` on the agent's soul
-- A one-off task needs doing without creating a persistent agent — delegate through the CEO without recruitment
+- A **skill** (not an agent) is the sole deliverable — call `skill-derive`
+  directly; the gap-healing path in Phase 2 already wraps it
+- An existing agent needs behavioral changes — use `skill-improve` or
+  `soul-apply-override` on the agent's soul
+- `settings.recruit.auto_trigger_on_gap == false` AND the gap is ambiguous —
+  fall back to the v5 behaviour (ASK_USER with the role spec draft)
 
 ## Non-Goals
 
-recruit is defined as much by what it refuses to do as by what it does.
-
-- **Not a skill author.** recruit hires agents, not skills. Missing capabilities cascade through `design-agent` Step 4d (skill-derive / skill-create / research-deep), not through new recruitment.
-- **Not a runtime registry.** Agent lookup at runtime is `org-sync` + `org-registry.md`. recruit writes the agent .md and hands off; it does not maintain a registry.
-- **Not a drift monitor.** Post-deploy persona drift is `memory-reflect` + `evolution-scan` territory. recruit evaluates a fresh agent; post-hire monitoring is a separate concern.
-- **Not a pool of 1.** Even quick-hire requires 2 heterogeneous candidates. Single-candidate selection is not hiring — it is acceptance without comparison.
-- **Not an auto-speaker committee.** The hiring committee chair follows a fixed protocol; no LLM-driven speaker selection (fits AutoGen's model, not kiho's markdown-reproducibility ethos).
-- **Not a 4-agent resume-screening pipeline.** kiho's depth cap 3 forbids this shape; `design-agent` + `interview-simulate` + committee is the sanctioned split.
+- **Not a skill author in isolation.** Recruit owns the wrapper flow; skill
+  authoring is delegated to `skill-derive` inside Phase 2.
+- **Not a registry.** `org-sync` + `$COMPANY_ROOT/agents/INDEX.md` own runtime
+  lookup; recruit writes agent.md and hands off.
+- **Not a drift monitor.** Post-deploy persona drift is `memory-reflect`.
+- **Not a pool of 1, 2, or 3.** Four is the hard minimum per user direction
+  and `settings.recruit.min_candidates_always`.
+- **Not an emitter of empty memory.** Phase 6 seeds `lessons.md`, `todos.md`,
+  and `observations.md` with non-empty content; lint R5 rejects otherwise.
 
 ## BCP 14 key words
 
-The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, **MAY** in this document are to be interpreted as described in BCP 14 (RFC 2119 and RFC 8174) when, and only when, they appear in all capitals.
+The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, **MAY** are
+to be interpreted as described in BCP 14 (RFC 2119 and RFC 8174) when, and
+only when, they appear in all capitals.
 
 ## Inputs
 
 ```
-department: engineering | pm | hr | qa
-role:       <role description — e.g., "frontend IC specializing in React and design systems">
-headcount:  <number of agents to hire, default 1>
-tier:       quick-hire | careful-hire
-conditions: <optional constraints — e.g., "must have Bash tool access", "model: opus">
-rubric_path: <optional — path to existing rubric. If not provided, one will be created.>
-requestor:  <agent-id of the department leader requesting>
+op:            auto-recruit | reassess
+role_brief:    <free text — what capability is missing / what the agent must do>
+requestor:     <agent-id> (usually ceo-01 or a dept lead)
+trigger:       raci_gap | midwave_skill_gap | dept_headcount | user_request
+capability_gap: [<skill_description_1>, ...]   # from CEO if available
+conditions:    <optional constraints — tool floor, model cap, budget>
+settings:      <inline `recruit.*` overrides; else read from $COMPANY_ROOT/settings.md>
 ```
 
-## Role-spec planner
+## Phase 0 — Load settings
 
-**MUST** precede any candidate generation. Grounded in Anthropic's sprint-contract pattern — agree on what "done" looks like before drafting [Grounding §1].
+1. Read `$COMPANY_ROOT/settings.md` frontmatter. Merge `[recruit]` section over
+   plugin `config.toml` `[recruit]` fallback. Required keys resolved:
+   - `auto_trigger_on_gap` (default `true`)
+   - `min_candidates_always` (default `4`, cannot be lowered)
+   - `committee_gate_threshold` (default `4.0`)
+   - `synthesis_when_complementary` (default `true`)
+   - `synthesis_rubric_delta_max` (default `0.20`)
+   - `memory_seed_on_hire` (default `true`)
+   - `max_auto_recruits_per_turn` (default `2`)
+   - `skill_research_before_design` (default `true`)
+   - `max_skills_authored_per_recruit` (default `3`)
+   - `max_design_iterations` (default `3`)
+2. If `settings.recruit.auto_trigger_on_gap == false` AND `op == auto-recruit`
+   coming from a RACI / mid-wave trigger → emit `status: v5_fallback_required`
+   with the draft `role-spec.md` attached and return. CEO then runs its legacy
+   v5 ASK_USER path.
+3. Check the turn's `.kiho/state/ceo-ledger.jsonl` for prior
+   `action: auto_recruit_started` entries in this turn. If count ≥
+   `max_auto_recruits_per_turn` → emit `status: runaway_guard_hit` and
+   ASK_USER via the CEO before proceeding.
 
-Before calling `design-agent`, recruit produces a structured `role-spec.md` capturing the four-field contract:
+## Phase 1 — Role spec STUB
+
+**MUST** run before any candidate is drafted. v5 produced a full four-field
+contract; v6 produces a **stub** — no skill enumeration, because Phase 2's
+design-validate-fill-validate loop is where skills emerge.
+
+Write `.kiho/state/recruit/<slug>/role-spec.md` with:
 
 ```yaml
 role_spec:
   objective:       <one sentence — what the hired agent must accomplish>
-  output_format:   <structured artifact shape — code / report / decision / routing>
-  tool_boundaries: <must-have / must-not-have tools; model-tier cap or floor>
-  termination:     <completion criteria — how the requesting leader knows the agent's turn ends>
-  scaling_rule:    <how many invocations / what depth this agent lives at>
-  work_sample:     <one held-out real-job example the candidate MUST complete in interview>
+  output_format:   <artifact shape — code | report | decision | routing | review>
+  tool_boundaries: <must-have / must-not-have tools; model floor or cap>
+  termination:     <completion criteria — how the leader knows a turn ended>
+  scaling_rule:    <expected invocation depth + fanout>
+  work_sample:     <one held-out real-job task — used in Phase 4 Round 7>
+  # v6 additions:
+  capability_keywords: [<free-text descriptors — NOT skill IDs yet>]
+  diversity_axes_required: 3   # candidates must differ on all three
 ```
 
-For **quick-hire**, produce a 1-paragraph version of the above (one line per field is enough).
-For **careful-hire**, produce the full template plus success metrics and red-line scenarios.
+No `required_skills:` yet. Design-agent proposes skills in Phase 2. This
+prevents anchoring and lets the agent designer think freshly about what the
+ideal professional needs.
 
-The role-spec is written to `.kiho/state/recruit/<slug>/role-spec.md` and is the source of truth for `design-agent`, `interview-simulate`, and the hiring committee. **MUST NOT** skip this step — without it, candidates optimize for the wrong objective and the interview rounds measure the wrong things.
+## Phase 2 — Design-validate-fill-validate loop (CORE REFLEX)
 
-## Quick-hire protocol
-
-Use for standard IC roles with well-defined responsibilities and existing templates.
-
-### Generate heterogeneous candidates
-
-1. Call `skills/core/hr/design-agent/` twice, producing 2 candidate agent .md files. Each call runs the full 12-step pipeline including `interview-simulate(mode: light)` in Step 7, so both arrive pre-scored on the rubric.
-2. **Candidates MUST differ on at least 2 of these 3 axes** (diversity enforcement — prevents correlated errors [Grounding §3]):
-   - Persona seed (different Big Five emphasis, e.g., conservative/safety-focused vs autonomous/efficiency-focused)
-   - Tool manifest (different permitted tool set within role bounds)
-   - Model tier (e.g., sonnet vs opus on long-horizon task signals)
-3. Both candidates must meet the role-spec and pass design-agent's minimum pass gates before reaching the committee.
-
-### Mini-committee selection
-
-4. Convene a mini-committee (HR lead + requesting department lead):
-   - Topic: "Select the best candidate for role: <role>"
-   - Members receive both candidate .md files, the role-spec, the rubric, and the interview-simulate transcripts from each candidate's Step 7 run
-   - Single-round committee (max_rounds: 1) — compare and choose
-5. The winning candidate is deployed to `agents/` or `agents/_templates/`.
-
-### Register
-
-6. Call `kb-add` with `page_type: entity` to register the new agent.
-
-### Onboard the winner (v5.20 Wave 3.1)
-
-7. Call `onboard agent_id=<winner> mentor_id=<dept-lead-of(department)>` with no toy_task argument (onboard picks one from `state/onboarding-tasks/<dept>/`). The new agent runs through 3 ramp iterations paired with a mentor before taking on real work. Do **NOT** treat onboarding as optional — recruit produces a competent persona; onboard makes that persona productive in *this* department. See `skills/core/hr/onboard/SKILL.md`.
-
-### Close out losers (v5.20 Wave 3.1)
-
-8. For every non-winning candidate, call `rejection-feedback cycle_id=<cycle_id> candidates=[<loser_ids>]`. This writes per-candidate axis breakdowns + decisive axis + dev suggestion + re-interview window into the candidate template's memory at `memory/rejection-feedback.md` (retention: 365d per `references/memory-pruning-policy.md`). Skip only when there was exactly one candidate (quick-hire single-candidate path is forbidden anyway by Non-Goals "Not a pool of 1").
-
-## Careful-hire protocol
-
-Use for department leads, novel roles, or any position where a bad hire is costly.
-
-### Generate candidate pool
-
-1. Generate `headcount × 4` candidates via `skills/core/hr/design-agent/`. For headcount=1, that is 4 candidates.
-2. **Candidate pool MUST span ≥3 distinct generation strategies** (different persona seeds AND tool manifests AND/OR model tiers). Identical prompts + identical model produce correlated garbage; heterogeneity is the hiring committee's only defense against hivemind failure [Grounding §3].
-3. Pre-screen against the rubric's disqualifying traits. Eliminate obviously unfit candidates.
-
-### Interview rounds (delegated to interview-simulate)
-
-Recruit does NOT run interview rounds inline. It compiles a **test suite** from `references/interview-rounds.md` (6 rounds, each a test dict with scenario, expected behavior, test_type, and rubric weights) plus an appended drift test and an appended work-sample test for `mode: full`.
-
-For each surviving candidate:
+Iterate at most `settings.recruit.max_design_iterations` times (default 3).
+Output is a **validated recipe**: a persona + skill list where every skill ID
+resolves to `$COMPANY_ROOT/skills/<id>/SKILL.md`.
 
 ```
-interview-simulate(
-  candidate_path:    agents/_candidates/<candidate-slug>.md,
-  test_suite:        <compiled from references/interview-rounds.md + work-sample from role-spec>,
-  mode:              full,                                  # 3x replay on drift test
-  timeout_per_test:  90,
-  rubric:            <from rubric_path>,
-  requestor:         recruit
-)
+for iteration in 1..max_design_iterations:
+
+  2.1 THINK — invoke design-agent op=propose_recipe with the role-spec stub.
+      Returns:
+        - persona_draft { role_generic, role_specialties, soul_traits_hint }
+        - wanted_skills [ { id_hint, description, feature_list, rationale } ]
+        - skill_id_hints must be kebab-case `sk-*` but need not exist yet
+
+  2.2 DESIGN — design-agent emits a draft agent.md with skills set to the
+      `id_hint` values. IDs are UNRESOLVED at this stage.
+
+  2.3 VALIDATE skills — for each wanted_skill:
+        resolved = Path($COMPANY_ROOT / "skills" / id_hint / "SKILL.md").exists()
+        if resolved:
+          read SKILL.md; compute feature_coverage(wanted.feature_list, skill.features)
+          if feature_coverage >= 0.80: mark "resolved_reuse"
+          elif feature_coverage < 0.40: mark "conflict_narrow"  # existing too narrow
+          else:                        mark "partial_reuse"     # candidate may want IMPROVE
+        else:
+          mark "to_author"
+
+  2.4 FILL BACK — for each mark in {to_author, conflict_narrow, partial_reuse}:
+
+    authored_count = count(mark == to_author OR creates new ID via conflict)
+    if authored_count > settings.recruit.max_skills_authored_per_recruit:
+      emit status: too_many_skills_needed
+      ASK_USER via CEO to (a) split role, (b) raise cap, (c) narrow wanted list
+
+    for each wanted_skill where mark in {to_author, conflict_narrow}:
+      2.4a  Invoke kiho-researcher with query built from wanted.description +
+            wanted.feature_list (uses KB → trusted sources → web → deepwiki →
+            clone → ask_user cascade). Budget: respect
+            settings.external_skills.allow_references and settings.performance.*.
+
+      2.4b  Researcher returns { findings, citations, synthesis_draft }.
+
+      2.4c  Invoke skill-derive with
+              { parents: [], use_case: wanted.description,
+                seed_findings: findings, proposed_name: wanted.id_hint,
+                rationale: wanted.rationale }
+            Skill-derive emits $COMPANY_ROOT/skills/<id>/SKILL.md and may add
+            references/ + scripts/ + spec shots. Frontmatter lifecycle=draft.
+
+      2.4d  Invoke kiho-kb-manager op=kb-add page_type=entity to register the
+            new skill; it updates $COMPANY_ROOT/skills/INDEX.md.
+
+    for each wanted_skill where mark == partial_reuse:
+      2.4e  Invoke skill-improve with
+              { skill_id: id_hint,
+                proposed_delta: wanted.rationale + wanted.feature_list,
+                committee_mode: light }
+            skill-improve handles the self-improvement committee gate; if
+            approved, bumps semver on the SKILL.md.
+
+  2.5 VALIDATE AGAIN — re-read every wanted_skill.id_hint file. Zero
+      unresolved permitted. If any still missing after fill-back (researcher
+      cost cap hit / user rejected during ASK_USER path / researcher could not
+      find seed material):
+        option (a) REVISE persona — design-agent drops the unresolvable skill
+                   or substitutes an adjacent available skill; go to 2.1 with
+                   the updated wanted list
+        option (b) ESCALATE — return status: skill_fill_blocked with the
+                   specific missing skill IDs; CEO decides whether to ASK_USER
+
+  2.6 LOOP CONTROL — if design-agent made any REVISE in 2.5, restart at 2.1.
+      Exit loop when:
+        (a) all wanted_skills resolve AND design-agent reports
+            persona_satisfied: true
+        (b) iteration == max_design_iterations → ESCALATE with the last draft
 ```
 
-The 6 rounds are:
+Detailed heuristics, feature-coverage scoring, and edge cases:
+`references/skill-gap-resolution.md`.
 
-1. **Round 1: Core domain knowledge** — `r1-domain`, `test_type: basic`
-2. **Round 2: Tool proficiency** — `r2-tools`, `test_type: tool_use`
-3. **Round 3: Edge case handling** — `r3-edge`, `test_type: edge`
-4. **Round 4: Soul coherence under pressure** *(hard gate)* — `r4-coherence`, `test_type: coherence`
-5. **Round 5: Team-fit with red-line conflict** *(hard gate)* — `r5-team-fit`, `test_type: coherence`
-6. **Round 6: Self-improvement reflection** — `r6-reflection`, `test_type: coherence`
+After Phase 2 exits cleanly: we hold one validated **recipe** (persona +
+resolved skill list). Phase 3 uses it as the brief for multi-candidate
+generation.
 
-Plus `r7-drift` (3x replay) and `r8-work-sample` (the held-out real-job task from role-spec) when `mode: full`.
+## Phase 3 — Produce 4 candidates (ALWAYS 4)
 
-### 8-round persona-stability probe (careful-hire only)
+Four is the hard minimum per `settings.recruit.min_candidates_always`. If the
+setting is raised (e.g., 6), produce that many; never fewer than 4.
 
-**Required for leads and any role producing user-visible output.** Grounded in arXiv 2402.10962 §"drift measurable by round 8" [Grounding §4]:
-
-1. Converse with the candidate for 8 turns on off-topic / adversarial inputs
-2. Re-probe the candidate's persona-anchor questions (same questions as Round 4)
-3. Score consistency with the first-round answers — persona_stability ≥ 0.80 required
-4. Failures route back to `design-agent` for soul adjustment (Section 11 exemplars + Section 6 behavioral rules)
-
-Skip for quick-hire (time budget).
-
-### Rubric scoring guide
-
-Each round produces a 1-5 score on **6 dimensions** (was 5 pre-v5.16.6; work-sample added).
-
-| Dimension | Default weight | What it measures |
-|---|---|---|
-| Accuracy | 0.20 | Did the candidate solve the problem correctly? |
-| Clarity | 0.10 | Is the response structured and unambiguous? |
-| Persona fit | 0.20 | Did the candidate act in character, consulting its soul? |
-| Tool use | 0.15 | Right tool for the right operation? |
-| Refusal handling | 0.15 | Correctly refused red-line violations? Escalated when uncertain? |
-| **Work-sample** | 0.20 | Did the candidate pass the held-out real-job task? [r=0.54 predictive validity — Schmidt-Hunter 1998, Grounding §5] |
-
-Per-round weight overrides live in `references/interview-rounds.md`.
-
-**Per-dimension hard thresholds (Anthropic harness doctrine — any single dimension below floor = rejected) [Grounding §2]:**
-
-| Tier | Accuracy | Clarity | Persona fit | Tool use | Refusal | Work-sample |
-|---|---|---|---|---|---|---|
-| quick-hire floor | 3.0 | 2.5 | 3.0 | 2.5 | 3.5 | pass |
-| careful-hire floor | 3.5 | 3.0 | 4.0 | 3.5 | 4.0 | pass |
-
-Averaged `candidate_score` still computed for ranking, but **MUST NOT** be the only gate — averaging lets a candidate fail safety and still get hired. A single dimension below floor rejects the candidate regardless of mean.
-
-### Pass thresholds (composite, applied after per-dim floors)
-
-- **Quick-hire:** `candidate_score >= 3.8 AND worst_weakness >= 3.0 AND work-sample == pass` (design-agent Step 7 authoritative; mini-committee picks between passing candidates)
-- **Careful-hire:** `candidate_score >= 4.0 AND worst_weakness >= 3.5 AND r4-coherence >= 4.0 AND r5-team-fit >= 4.0 AND drift <= 0.20 AND persona_stability >= 0.80 AND work-sample == pass`
-
-### Auditor review
-
-Assign 4 auditors, each spawned from `agents/kiho-auditor.md` with a soul-grounded persona override:
-
-- **Skeptic** (Agreeableness 2, Neuroticism 7, value: "disbelieve until proven")
-- **Pragmatist** (Conscientiousness 6, Openness 5, value: "what ships")
-- **Overlap hunter** (Conscientiousness 8, Openness 4, value: "no redundancy")
-- **Cost hawk** (Conscientiousness 9, Neuroticism 5, value: "every token is paid for")
-
-Each auditor reviews all candidates' interview-simulate transcripts (not just aggregate scores) using its declared persona. The persona is injected as Section 3 + 4 soul-override so the auditor reasons in character.
-
-### Hiring committee
-
-1. Members: HR lead + 4 auditors (5 total).
-2. Topic: "Hire <headcount> agent(s) for role: <role>".
-3. `max_rounds: 2`. Committee evaluates auditor recommendations + interview-simulate aggregate scores + transcripts + per-dim floor report, selects winners.
-4. Deterministic speaker rotation — no LLM-auto-speaker selection (kiho markdown reproducibility).
-
-### Deploy
-
-Deploy winning candidate(s) to `agents/` or `agents/_templates/` and register via `kb-add`.
-
-### Onboard the winners (v5.20 Wave 3.1)
-
-For each winner, call `onboard agent_id=<winner>` exactly as in quick-hire step 7. Careful-hire winners get the same 3-iteration ramp; nothing about being a careful-hire reduces the need for grounding in the actual department's tooling.
-
-### Close out losers (v5.20 Wave 3.1)
-
-For every non-winning candidate (typically 3 of 4 in a `headcount=1` careful-hire), call `rejection-feedback cycle_id=<cycle_id> candidates=[<loser_ids>]`. Careful-hire losers are the highest-information rejections in the org — they passed multiple gates before losing — so their feedback is especially load-bearing for the next recruit cycle in this domain.
-
-## Rubric prerequisite
-
-If `rubric_path` is not provided:
-
-1. Search KB for an existing rubric matching the role description via `kb-search`.
-2. If found, use it.
-3. If not found, design one first: convene mini-committee (HR lead + requesting department lead + one experienced IC), topic "Design evaluation rubric for role: <role>", output a rubric with competencies / scales / disqualifiers / differentiators / interview scenarios, store via `kb-add` with `page_type: rubric`.
-
-Recruitment does not proceed without a rubric. Hard prerequisite.
-
-## Worked examples
-
-### Example 1 — quick-hire, heterogeneous candidates
-
-Invocation:
 ```
-recruit(department=engineering, role="Backend IC for Node.js API development",
-        tier=quick-hire, conditions="tools: Read,Glob,Grep,Write,Edit,Bash")
+3.1  Using the Phase 2 recipe as the brief, spawn design-agent × 4 IN PARALLEL.
+     Each spawn receives the same role-spec + recipe but a distinct
+     diversity prompt targeting a different axis emphasis:
+
+       Candidate 1 — seniority-emphasis: experienced, conservative soul
+       Candidate 2 — seniority-emphasis: mid-level, autonomous soul
+       Candidate 3 — philosophy-emphasis: safety-first, refusal-heavy Big Five
+       Candidate 4 — specialty-emphasis: breadth over depth, high Openness
+
+3.2  Each candidate proposes its OWN final persona + skill list. It MAY
+     extend the Phase 2 skill recipe with additional skills it wants, or
+     narrow (drop skills it does not need for its philosophy). Candidates
+     do NOT author skills themselves — they declare `skills_wanted` with
+     features; Phase 3.5 reconciles.
+
+3.3  Each candidate runs its own inline design-agent Steps 1-7 (persona,
+     soul, coherence check, tool allowlist, team-fit). Candidates that fail
+     their own pass gates (coherence < 0.70, tool-alignment < 0.70, etc.)
+     are REGENERATED up to 2 times; final failure → ESCALATE with the
+     candidate's failure report.
+
+3.4  Diversity enforcement: after all 4 land, recruit MUST verify they
+     differ on all 3 axes (seniority OR philosophy OR specialty — Big Five
+     spread ≥ 3 on at least one dimension for each candidate pair). If two
+     candidates are too similar, regenerate the younger.
 ```
 
-Expected:
+Output of Phase 3: 4 candidate drafts under
+`.kiho/state/recruit/<slug>/candidates/{1,2,3,4}/agent.md.draft` — each a
+fully-formed v2 agent.md except for the `skills[]` list, which may still
+contain unresolved `id_hint` entries from Step 3.2 extensions.
+
+## Phase 3.5 — Cross-candidate skill reconciliation
+
+**New in v6.** Before interviews, converge the 4 candidates' skill proposals
+into a clean, conflict-free set in `$COMPANY_ROOT/skills/`. Without this step,
+candidate A authors `sk-visual-qa-playwright` and candidate B authors
+`sk-visual-regression-testing` in parallel, polluting the library with
+near-duplicates.
+
+```
+3.5.1  UNION
+  proposed_skills = ⋃ for c in candidates { c.skills_wanted }
+
+3.5.2  For each unique skill_id_hint in proposed_skills:
+  existing = load($COMPANY_ROOT/skills/<id>/SKILL.md) or None
+  if existing and feature_coverage(wanted.features, existing.features) >= 0.80:
+    action = RESOLVED_REUSE
+  elif existing and feature_coverage < 0.40:
+    action = CONFLICT_NARROW     # existing skill too narrow → propose IMPROVE or AUTHOR_NEW
+  elif existing is None and semantic_neighbor_exists(wanted.description):
+    action = NAMING_CONFLICT     # similar-domain skill has different ID → dedupe names
+  else:
+    action = AUTHOR_NEW
+
+3.5.3  DEDUPE proposals among candidates themselves:
+  for (wanted_A, wanted_B) where feature_overlap(A, B) >= 0.70
+                               AND A.candidate != B.candidate:
+    merge into a single skill with features = A.features ∪ B.features
+    both candidates' skills_wanted lists now reference the merged ID
+    record in .kiho/state/recruit/<slug>/reconciliation-ledger.jsonl
+
+3.5.4  DEPRECATE existing:
+  for each existing skill id where:
+    combined_coverage(candidates' proposals against existing.features) >= 0.95
+    AND existing.quality_score <= 0.60                # quality from skill-performance.jsonl
+    AND existing.lifecycle in {draft, active}
+    AND not any_agent_depends_on(existing)
+  →  invoke kiho-kb-manager op=kb-update on existing SKILL.md:
+       frontmatter: deprecated: true, superseded_by: <new_or_merged_id>
+     existing agents pointing to it are re-pointed at next memory-reflect
+
+3.5.5  IMPROVE existing:
+  for each existing skill where coverage in [0.60, 0.80) AND some candidate
+  adds a clearly-useful feature:
+    invoke skill-improve with { skill_id, proposed_delta: candidate_rationale }
+    on approval, bump semver; all 4 candidates' skills_wanted updated to
+    reference the improved version
+
+3.5.6  AUTHOR truly-new:
+  for each wanted where action == AUTHOR_NEW (after 3.5.3 dedupe collapses):
+    reuse Phase 2.4 flow — kiho-researcher → skill-derive → kb-manager kb-add
+    respect settings.recruit.max_skills_authored_per_recruit total budget
+    (Phase 2 authorings + Phase 3.5 authorings summed)
+
+3.5.7  RESOLVE candidate agent.md files:
+  for each candidate:
+    replace c.skills_wanted with the final resolved ID list from 3.5.2-3.5.6
+    validate every ID resolves to $COMPANY_ROOT/skills/<id>/SKILL.md
+    any unresolved → hard fail; Phase 2 is the only place unresolved IDs are
+    allowed to live
+
+3.5.8  Update $COMPANY_ROOT/skills/INDEX.md with additions, version bumps,
+       and deprecations. Library is now conflict-free.
+```
+
+Detailed heuristics, scoring formulas, and tie-breaking rules:
+`references/skill-reconciliation.md`.
+
+## Phase 4 — Interview
+
+Four candidates × four rounds = 16 interview runs, plus work-sample run.
+Recruit compiles a `test_suite` from `references/interview-rounds.md` +
+appended work-sample test and hands it to `interview-simulate(mode: full)`
+per candidate. Recruit does not spawn interviewers inline.
+
+Rounds (as in v5 careful-hire — see `references/interview-rounds.md`):
+
+1. **r1-domain** — core domain knowledge (accuracy-weighted)
+2. **r2-tools** — tool proficiency (tool_use-weighted)
+3. **r3-edge** — ambiguous / adversarial input (refusal-weighted)
+4. **r4-coherence** — value-hierarchy under pressure *(hard gate ≥ 4.0)*
+5. **r5-team-fit** — red-line conflict with an existing teammate *(hard gate ≥ 4.0)*
+6. **r6-reflection** — self-improvement reflection
+7. **r7-work-sample** — the held-out task from role-spec.work_sample
+8. **r8-drift** — 3× replay of a r1-variant; drift must be ≤ 0.20
+
+Auditors: 4 personas spawned from `agents/kiho-auditor.md`:
+
+- **Skeptic** (Agreeableness 2, Neuroticism 7)
+- **Pragmatist** (Conscientiousness 6, Openness 5)
+- **Overlap hunter** (Conscientiousness 8, Openness 4)
+- **Cost hawk** (Conscientiousness 9, Neuroticism 5)
+
+Each auditor reviews all 4 candidates' interview-simulate transcripts.
+
+### Rubric & floors (unchanged from v5 careful-hire)
+
+6-dimension rubric (Accuracy, Clarity, Persona fit, Tool use, Refusal,
+Work-sample) with per-dim floors:
+
+| Dim | Floor |
+|---|---|
+| Accuracy | 3.5 |
+| Clarity | 3.0 |
+| Persona fit | 4.0 |
+| Tool use | 3.5 |
+| Refusal | 4.0 |
+| Work-sample | pass |
+
+Composite: `rubric_avg >= 4.0 AND worst_dim >= 3.5 AND r4 >= 4.0 AND r5 >= 4.0 AND drift <= 0.20`.
+
+## Phase 5 — Selection with SYNTHESIS
+
+```
+5.1  Rank candidates by rubric_avg. Read top1, top2.
+
+5.2  delta = top1.score - top2.score
+
+5.3  if settings.recruit.synthesis_when_complementary == true AND
+        delta <= settings.recruit.synthesis_rubric_delta_max AND
+        strength_overlap(top1, top2) is "small" (< 0.50 Jaccard on role_specialties):
+
+       5.3a  Invoke design-agent op=synthesize_candidates with
+               { top1: candidate_1, top2: candidate_2, role_spec, recipe }
+             Produces a merged persona:
+               role_generic:       top1.role_generic  (tie-break: more recently
+                                                       authored tokens win)
+               role_specialties:   top1.specialties ∪ top2.specialties
+               skills:             top1.skills ∪ top2.skills  (re-validate via
+                                                               Phase 3.5 dedupe)
+               Big Five:           weighted mean, weight = rubric_avg per trait
+                                   subject to coherence constraints
+               values:             top-3 of (top1.values ∪ top2.values) ranked
+                                   by combined rubric_avg contribution
+               red_lines:          union (never narrows a red line)
+
+       5.3b  Run a fresh Phase 4 interview suite against the synthesized
+             candidate. Same test suite, same auditors.
+
+       5.3c  if synth.rubric_avg >= max(top1.rubric_avg, top2.rubric_avg):
+               hired = synthesized candidate
+               hire_provenance.hire_type = "v6-synthesis"
+             else:
+               hired = top1
+               hire_provenance.hire_type = "v6-auto-recruit"
+
+     else:
+       5.4  hired = top1
+            hire_provenance.hire_type = "v6-auto-recruit"
+
+5.5  Deploy the winner (Phase 6). Close out losers via rejection-feedback
+     (inherited from v5) for memory-retained axis breakdowns.
+```
+
+Detail: `references/candidate-synthesis.md`.
+
+## Phase 6 — Memory seed + intake
+
+**New in v6.** Every hired agent `MUST` land with non-empty memory files.
+Governed by `settings.recruit.memory_seed_on_hire == true` (default).
+
+```
+6.1  Create memory/ at $COMPANY_ROOT/agents/<id>/memory/
+     (directory MUST exist — design-agent creates it at Step 7).
+
+6.2  Seed lessons.md from the interview:
+       - 1 lesson per rubric dim where the candidate scored < 4.5 ("IC must
+         improve on <dim> — observed in r<round> — see transcript at <path>")
+       - 1 lesson per auditor dissent
+       - 1 "hire rationale" lesson summarizing why THIS candidate won over
+         the other three (cite rubric_avg, strength deltas, synthesis path)
+     Format matches memory/lessons.md schema from v5 memory-reflect output.
+
+6.3  Seed todos.md from the work-sample + role-spec:
+       - 1 todo per unresolved sub-task the work-sample surfaced
+       - 1 orientation todo: "Read $COMPANY_ROOT/company/wiki/index.md and
+         the referenced entries tagged <capability_keywords>"
+       - 1 reflection todo: "After first wave, invoke memory-reflect to
+         consolidate observations into lessons"
+
+6.4  Seed observations.md from interview transcripts:
+       - per-round 1-sentence observation extracted from the candidate's
+         own response (what IT noticed while answering)
+       - Keep verbatim tone; these are the agent's episodic seed memories
+
+6.5  Set current_state:
+       availability: "engaged"   (if active_project is being assigned this turn)
+                     or "free"   (if hiring proactively without immediate assignment)
+       active_project: <project_id or null>
+       active_assignment: <wave/plan-item id or null>
+       last_active: <iso_timestamp_utc>
+
+6.6  Run bin/agent_md_lint.py against the finished agent.md:
+       python ${CLAUDE_PLUGIN_ROOT}/bin/agent_md_lint.py \
+         <agent_md_path> --company-root $COMPANY_ROOT
+     In PR #2 the lint runs in warn-only mode; log any warnings to ledger as
+       action: agent_md_lint_warning, rule: <RN>, message: <...>
+     In PR #3 the lint runs in enforce mode and a failure rolls back the hire.
+```
+
+Detail: `references/memory-seed-on-hire.md`.
+
+## Pre-emit gate (carried forward from v5.22)
+
+Before writing the final `agent.md` to `$COMPANY_ROOT/agents/<id>/agent.md`,
+recruit **MUST** confirm all of the following artifacts exist AND are
+non-stale (created within this recruit session):
+
+1. `role-spec.md` with Phase 1 four-field contract complete
+2. Phase 2 validated recipe with zero unresolved skill IDs
+3. Phase 3.5 reconciliation ledger with zero conflicts remaining
+4. `interview-simulate` transcripts for 4 candidates (+ synth if triggered)
+5. 4 auditor reviews captured
+6. Phase 6 memory seed: `lessons.md`, `todos.md`, `observations.md` each
+   exist and > 0 bytes
+7. `rejection-feedback` written for every non-winning candidate
+
+If ANY is missing, abort with:
+
 ```json
-{
-  "role_spec": ".kiho/state/recruit/eng-backend-ic/role-spec.md",
-  "candidates": [
-    {"name": "eng-backend-ic-safe", "persona": "conservative", "model": "sonnet",
-     "rubric_avg": 4.2, "worst_dim": 3.8, "work_sample": "pass"},
-    {"name": "eng-backend-ic-fast", "persona": "autonomous", "model": "sonnet",
-     "rubric_avg": 4.0, "worst_dim": 3.5, "work_sample": "pass"}
-  ],
-  "winner": "eng-backend-ic-safe",
-  "rationale": "committee preferred safety margin over speed for API work"
-}
+{ "status": "pre_emit_gate_failed", "missing": [<item-ids>] }
 ```
 
-### Example 2 — careful-hire, lead role with persona-stability probe
-
-Invocation:
-```
-recruit(department=pm, role="Product Lead for B2B analytics",
-        headcount=1, tier=careful-hire)
-```
-
-Expected outcome: 4 candidates → pool screened → 3 survive to interview rounds → 2 pass per-dim floors and persona-stability (0.85, 0.82) → 1 passes committee vote → deployed.
-
-### Example 3 — work-sample rejects high-ranking candidate
-
-Invocation same as Example 1 but with role requiring real ORM migration execution.
-
-Result:
-```json
-{
-  "candidates": [
-    {"name": "eng-backend-ic-a", "rubric_avg": 4.4, "work_sample": "fail",
-     "per_dim_floor_check": "fail — work_sample below floor", "hired": false},
-    {"name": "eng-backend-ic-b", "rubric_avg": 3.9, "work_sample": "pass",
-     "per_dim_floor_check": "pass", "hired": true}
-  ]
-}
-```
-
-Work-sample floor caught the averaged rubric's blind spot — candidate A aced Q&A but could not execute on real work.
-
-## Failure playbook
-
-**Severity**: error (blocks hire).
-**Impact**: role-spec exists but no agent deployed.
-**Taxonomy**: pool | rubric | interview | committee | protocol.
-
-### Decision tree
-
-```
-recruit failure
-    │
-    ├─ candidate pool not heterogeneous           → Route A (regenerate with diversity enforcement)
-    ├─ per-dim floor failed on all candidates     → Route B (revise role-spec — may be over-specified)
-    ├─ work-sample failed on all candidates       → Route C (role-spec task may be mis-scoped)
-    ├─ persona_stability < 0.80 (careful-hire)    → Route D (design-agent soul revision)
-    ├─ committee deadlock after 2 rounds           → Route E (CEO escalation with tie-breaker)
-    └─ interview-simulate protocol error          → Route F (log and retry once; escalate on second)
-```
-
-### Route A — pool homogeneity
-
-1. Abort the current interview batch; no candidate is viable.
-2. Re-invoke `design-agent` with explicit diversity directives in the brief.
-3. Restart the protocol from candidate generation.
-
-### Route B — role-spec over-specified
-
-1. Return to role-spec planner; relax `tool_boundaries` or `termination` if unrealistic.
-2. Convene mini-committee to review role-spec before regenerating candidates.
-
-### Route C — work-sample mis-scoped
-
-1. Validate the work-sample task is representative of actual downstream work.
-2. If the task is too narrow or too broad, rewrite it with the requesting leader.
-
-### Route D — persona stability
-
-1. Pass persona-stability transcript back to `design-agent` Step 2 + Step 11 (exemplars).
-2. Regenerate the affected candidate; other candidates in the pool remain eligible.
-
-### Route E — committee deadlock
-
-1. Escalate to CEO with auditor dissents, per-dim floor reports, and transcripts.
-2. CEO may tie-break, send back for additional candidate, or abort the hire.
-
-### Route F — interview-simulate error
-
-1. Log to `.kiho/state/ceo-ledger.jsonl`.
-2. Retry once with the same test suite.
-3. On second failure, escalate via `AskUserQuestion` with the sub-agent name and both responses.
-
-## Interview delegation
-
-Recruit never runs spawn-and-score inline. Per candidate it:
-
-1. Compiles the test suite from `references/interview-rounds.md`, substituting placeholders and appending the role-spec's work-sample as `r8-work-sample`.
-2. Calls `interview-simulate` with the candidate path, compiled test suite, and `mode: full`.
-3. Reads per-test scores and transcript_path.
-4. Maps test IDs back to round labels for reporting.
-
-This consolidation replaces ~70 lines of inline simulation logic. The test suite is pure-data and reviewable/editable without touching recruit's orchestration flow.
-
-## Auditor assignment
-
-The HR lead passes the persona when spawning each auditor:
-
-```json
-{
-  "agent": "kiho-auditor",
-  "persona": "skeptic",
-  "brief": "Review these 4 candidates for role: backend IC. Interview transcripts at <path>."
-}
-```
-
-All auditors see all interview-simulate transcripts, aggregate scores, and the per-dim floor report.
-
-## Pre-emit gate (v5.22)
-
-Before writing the final `agent.md` to `$COMPANY_ROOT/agents/<id>/agent.md` (or `agents/_templates/<id>.md`), recruit **MUST** confirm all of the following artifacts exist AND are non-stale (created within this recruit session):
-
-1. **role_spec.md** at `.kiho/state/recruit/<slug>/role-spec.md` (atomic) or `_meta-runtime/role-specs/<spec_id>/role-spec.md` (cycle) — four-field contract complete (objective, output_format, tool_boundaries, termination, scaling_rule, work_sample).
-2. **interview-simulate result** at the transcript path returned by `interview-simulate(mode: light|full)` — typically `.kiho/runs/interview-simulate/<date>-<candidate>.jsonl`. With aggregate score meeting the pass threshold:
-   - quick-hire: `candidate_score >= 3.8 AND worst_weakness >= 3.0 AND work-sample == pass`
-   - careful-hire: `candidate_score >= 4.0 AND worst_weakness >= 3.5 AND r4-coherence >= 4.0 AND r5-team-fit >= 4.0 AND drift <= 0.20 AND persona_stability >= 0.80 AND work-sample == pass`
-3. **For careful-hire only**: 4 auditor reviews captured in the hiring committee log — one per `{skeptic, pragmatist, overlap_hunter, cost_hawk}`.
-4. **For careful-hire only**: committee decision recorded in the run's transcript with a majority approval (≥3/5 members voting `approve`).
-5. **rejection-feedback** written for every non-winning candidate via `rejection-feedback cycle_id=<cycle_id> candidates=[<loser_ids>]` (skip only when there was exactly one candidate, which is forbidden anyway by Non-Goals "Not a pool of 1").
-
-If ANY of (1)–(5) is missing for the applicable tier, recruit **MUST NOT** emit. Abort with:
-```json
-{ "status": "pre_emit_gate_failed", "missing": [<item-ids>], "role_spec_path": "..." }
-```
-
-The emitted `agent.md` **MUST** include a `RECRUIT_CERTIFICATE:` HTML comment as the very first lines of the file so the v5.22 `pre_write_agent` PreToolUse hook (at `plugins/kiho/hooks/hooks.json`) lets the Write through. Template:
+The emitted `agent.md` MUST include a `RECRUIT_CERTIFICATE:` HTML comment as
+its first content (per v5.22 `pre_write_agent` PreToolUse hook contract):
 
 ```markdown
 <!-- RECRUIT_CERTIFICATE:
-       kind: quick-hire|careful-hire
-       role_spec: <absolute or project-relative path>
+       kind: v6-auto-recruit | v6-synthesis
+       role_spec: <path>
        candidate_slug: <slug>
-       interview_score: <aggregate mean>
+       interview_score: <aggregate_mean>
        committee_status: approved
-       emitted_at: <iso-timestamp>
+       synthesis_applied: <bool>
+       skills_authored_this_hire: [<ids>]
+       skills_improved_this_hire: [<ids>]
+       skills_deprecated_this_hire: [<ids>]
+       emitted_at: <iso_timestamp>
 -->
 ---
-name: <agent-name>
+schema_version: 2
+name: <agent_name>
 ...
 ```
 
-Defense in depth: even if recruit is bypassed entirely, the PreToolUse hook blocks the Write unless this header is present. The `bin/ceo_behavior_audit.py` script (DONE step 11) then verifies on session end that markers correspond to real role-spec and interview artifacts — a fake marker with no supporting artifacts is logged as `recruit_no_role_spec` or `recruit_no_interview` CRITICAL drift.
+## Phase 6.5 — Post-hire org sync + KB registration
+
+After every successful hire:
+
+1. Invoke `org-sync` with `event_type: hire`, agent_id, department, skills
+   authored/improved this hire, rubric_score, synthesis_bool. Updates
+   `$COMPANY_ROOT/agents/INDEX.md` + capability matrix.
+2. Invoke `kiho-kb-manager op=kb-add page_type=entity` for the new agent
+   (description, department, capabilities, reports-to, model tier).
+3. Append to `<project>/.kiho/state/management-journals/<requestor>.md`:
+   hire rationale + authored skills + deprecated skills.
+4. Log `action: auto_recruit_complete, hired: <agent_id>, candidates: 4,
+   synthesized: <bool>, skills_authored: <n>, skills_improved: <n>,
+   skills_deprecated: <n>` to `.kiho/state/ceo-ledger.jsonl`.
+
+If any registration step fails, log the failure but do not roll back the
+deploy — the agent.md and memory exist; subsequent runs re-sync via
+`org-sync`.
 
 ## Response shape
 
 ```json
 {
-  "status": "ok | pool_failed | rubric_failed | interview_failed | committee_deadlock | error",
-  "role_spec_path": ".kiho/state/recruit/eng-backend-ic/role-spec.md",
-  "hired": [
-    {
-      "agent_name": "eng-backend-ic",
-      "agent_path": "agents/_templates/eng-backend-ic.md",
-      "candidate_score": 4.2,
-      "worst_weakness": 3.8,
-      "drift": 0.11,
-      "persona_stability": 0.85,
-      "work_sample": "pass",
-      "per_dim_floors": {"accuracy": 4.0, "clarity": 3.8, "persona_fit": 4.2, "tool_use": 3.9, "refusal": 4.5, "work_sample": "pass"},
-      "auditor_consensus": "3/4 recommended",
-      "simulation_transcript": ".kiho/runs/interview-simulate/2026-04-16-eng-backend-ic.jsonl"
-    }
-  ],
-  "rejected": ["candidate-b", "candidate-c", "candidate-d"],
-  "rubric_used": "wiki/rubrics/rubric-backend-ic.md",
-  "kb_registered": true
+  "status": "ok | v5_fallback_required | runaway_guard_hit | too_many_skills_needed | skill_fill_blocked | pre_emit_gate_failed | committee_rejected | error",
+  "hired": {
+    "agent_id": "eng-visual-qa-ic-01",
+    "agent_path": "$COMPANY_ROOT/agents/eng-visual-qa-ic-01/agent.md",
+    "rubric_score": 4.38,
+    "hire_type": "v6-auto-recruit | v6-synthesis",
+    "memory_seeded": true,
+    "recruit_certificate_present": true
+  },
+  "candidates_evaluated": 4,
+  "synthesized": false,
+  "skills_authored": ["sk-visual-qa-invariants", "sk-screenshot-diff"],
+  "skills_improved": [],
+  "skills_deprecated": [],
+  "rejected_candidates": ["candidate-2", "candidate-3", "candidate-4"],
+  "reconciliation_ledger": ".kiho/state/recruit/<slug>/reconciliation-ledger.jsonl",
+  "role_spec_path": ".kiho/state/recruit/<slug>/role-spec.md",
+  "new_questions": [],
+  "escalate_to_user": null
 }
 ```
 
-## Post-hire org sync
+## Failure playbook
 
-After every successful hire, invoke `org-sync` with `event_type: hire` and the hire's agent_name, agent_path, department, role, tools, skills. `org-sync` updates `.kiho/state/org-registry.md`, `.kiho/state/capability-matrix.md`, and the relevant management journal. If `org-sync` fails, log the failure but do not fail the recruitment — the hire is deployed and registered in KB.
+| Failure | Route |
+|---|---|
+| `settings.recruit.auto_trigger_on_gap == false` | Return `v5_fallback_required`; CEO runs v5 ASK_USER path |
+| `max_auto_recruits_per_turn` exceeded | Return `runaway_guard_hit`; CEO ASK_USER |
+| Phase 2 researcher cannot find seed material | ESCALATE; design-agent REVISES persona and retries; final failure → `skill_fill_blocked` |
+| Phase 3 candidate fails own pass gates 2× | Regenerate; on third failure → `committee_rejected` |
+| Phase 3.5 conflicts unresolvable | ASK_USER with the conflict map; require user to pick keep/merge/author-new per row |
+| Phase 4 no candidate hits composite threshold | Return `committee_rejected`; CEO may ask user to widen role spec |
+| Phase 5 synth fails to exceed top1 | Hire top1; log synthesis_failed |
+| Phase 6 lint warn in PR #2 | Log warnings; proceed. In PR #3 enforce mode, rollback hire |
+| `pre_emit_gate_failed` | Surface missing-items list; do not write agent.md |
+
+## Interaction with existing v5.22 machinery
+
+- `pre_write_agent` PreToolUse hook: still active. The v6
+  `RECRUIT_CERTIFICATE:` marker includes new fields (hire_type,
+  synthesis_applied, skills_*_this_hire) — the hook regex is a superset
+  matcher, already permissive.
+- `bin/ceo_behavior_audit.py` DONE step 11: v6 emits
+  `action: auto_recruit_complete` with matching hire_provenance; audit
+  continues to flag unpaired recruit intents as drift.
+- `interview-simulate(mode: full)`: called per candidate AND per synthesized
+  candidate. Interface unchanged.
+- `rejection-feedback`: called for all non-winning candidates including
+  top1 when synth wins.
 
 ## Anti-patterns
 
-- **MUST NOT** skip the role-spec planner. Without it, candidates optimize for the wrong objective and interview rounds measure the wrong things.
-- **MUST NOT** generate 2+ identical candidates from the same prompt+model. Correlated errors make the committee a rubber stamp.
-- **MUST NOT** collapse the 6-dim rubric to a single averaged score. Per-dimension floors are the safety-critical gate — averaging hides refusal or work-sample failures.
-- **MUST NOT** run spawn-and-score inline. v5.9 moves this to `interview-simulate`; re-implementing here is a refactor bug.
-- **MUST NOT** hire from a pool of 1. Even quick-hire requires 2 heterogeneous candidates.
-- Do not let the requesting department lead be the sole decision-maker. HR provides balance.
-- Do not reuse a candidate agent that was rejected in a prior round. Generate fresh.
-- Do not promote a quick-hire to a leadership role without careful-hire reassessment. Leads need Round 4+5 hard gates and the persona-stability probe.
-- Do not ignore the drift metric. Careful-hire candidates with drift > 0.20 will drift in production.
+- **MUST NOT** skip Phase 1 stub. Pre-enumerated `required_skills` anchors
+  design-agent to what already exists; the whole point of v6 is that the
+  designer thinks freshly about what the ideal agent needs.
+- **MUST NOT** run Phase 2 fill-back without honoring
+  `max_skills_authored_per_recruit`. A recruit that authors 10 new skills is
+  not a recruit — it's a library sprint.
+- **MUST NOT** generate fewer than 4 candidates. `min_candidates_always` is
+  a hard floor.
+- **MUST NOT** skip Phase 3.5 reconciliation. Shipping 4 candidates whose
+  skill lists pollute the library with near-duplicates is the main failure
+  mode this whole flow exists to prevent.
+- **MUST NOT** hire with empty memory. Phase 6 seed is non-optional.
+- Do not run Phase 5 synthesis when top-2 strengths overlap heavily —
+  synthesis only helps when the two candidates are **complementary**, not
+  when they're the same agent with different names.
+- Do not author a new skill in Phase 3.5 that would have been found by
+  Phase 2 had design-agent looked — run Phase 3.5.2's semantic neighbor
+  check with `semantic_neighbor_exists`.
+- Do not let researcher spin indefinitely. Phase 2.4a honors
+  researcher's own budget; at budget exhaustion, design-agent REVISES.
 
 ## Rejected alternatives
 
-### A1 — Continuous post-deploy drift monitoring
+### A1 — Restore v5 quick-hire / careful-hire split
 
-**What it would look like.** A background telemetry loop that computes ASI (Agent Stability Index) continuously after deploy and auto-rehires when drift crosses threshold.
+Rejected — the split was tier-based but user direction is *"4 candidates
+always"* without exception. Two tiers create a selection problem (which
+tier for which role?) that the universal reflex eliminates.
 
-**Rejected because.** kiho has no runtime database (CLAUDE.md Non-Goals). Continuous monitoring requires persistent state and a scheduler; kiho relies on periodic `evolution-scan` runs and CEO-triggered reassessment. Drift is addressed via re-hire cadence, not live monitoring.
+### A2 — Author all candidate-proposed skills independently, dedupe later
 
-**Source.** arXiv 2601.04170 §"continuous monitoring, not set-and-forget"; CLAUDE.md Non-Goals §"Not a runtime database".
+Rejected — the point of Phase 3.5 is to CONVERGE before interviews so
+interview results reflect final-library skill coverage. Deferring to post-
+hire cleanup lets the library accumulate near-duplicates that are hard to
+merge after agents already depend on both.
 
-### A2 — Auto-speaker-selection inside the hiring committee
+### A3 — Run Phase 2 fill-back per-candidate rather than pre-candidate
 
-**What it would look like.** The committee chair (an LLM) picks the next speaker each round via AutoGen's GroupChatManager auto-strategy.
-
-**Rejected because.** Introduces non-determinism that clashes with kiho's markdown-reproducibility ethos. Committees must be replayable from state files; an LLM-chosen speaker order breaks that. Fixed rotation is a small loss of dynamism for a large gain in audit.
-
-**Source.** AG2 GroupChatManager docs §"auto strategy"; CLAUDE.md invariant §"Markdown canonical".
-
-### A3 — Resume-screening 4-agent pipeline (extractor / evaluator / summarizer / formatter)
-
-**What it would look like.** Split hiring into a pipeline of specialized agents — one extracts skills from the role description, one evaluates candidates, one summarizes, one formats the report.
-
-**Rejected because.** Explodes kiho's depth cap 3 and fanout cap 5 for a task the existing `design-agent` + `interview-simulate` + committee split already covers. Pipelines of this shape also produce inter-agent misalignment (MAST FM-2.x), the second-largest failure-mode category in multi-agent research.
-
-**Source.** arXiv 2504.02870 (resume-screening pipeline); arXiv 2503.13657 (MAST taxonomy §FM-2); CLAUDE.md invariant §"Depth cap 3, fanout cap 5".
-
-### A4 — PersonaGym's 150-environment persona evaluation sweep
-
-**What it would look like.** Evaluate each candidate against 150 distinct environments and 10,000 questions across 5 axes (Expected Action, Linguistic Habits, Persona Consistency, Toxicity Control, Action Justification).
-
-**Rejected because.** Dramatically over-budget for kiho's per-hire envelope (6 interview rounds + drift + work-sample + persona-stability probe already pushes token cost). Borrow the axes — particularly Linguistic Habits, which no LLM scores above 4.0 on — not the protocol. Adapted as Persona fit rubric dimension and the 8-round persona-stability probe.
-
-**Source.** arXiv 2407.18416 PersonaGym; kiho v5.16 attention-budget framing §"≤10 candidate-set ceiling".
-
-## Future possibilities
-
-Non-binding sketches per RFC 2561. Nothing in this section is a commitment; triggers, scope, and timelines may all change.
-
-### F1 — Periodic re-hiring cadence
-
-**Trigger condition.** `evolution-scan` reports persona drift > 0.30 on ≥ 2 agents in the same department over 30 days.
-
-**Sketch.** recruit gains a `tier: reassessment` flag that re-runs careful-hire's rounds on an existing agent using its current deployed .md as the candidate. If re-hire produces a materially different winning soul, propose a `soul-apply-override` diff for CEO approval.
-
-### F2 — Work-sample bank per department
-
-**Trigger condition.** Role-spec authors spend > 15 minutes drafting the work-sample field across ≥ 5 consecutive recruitments.
-
-**Sketch.** Departments maintain a curated work-sample bank (`kb/rubrics/work-samples/<dept>/*.md`) that role-specs reference by ID. Speeds up planner step; normalizes what "do the actual job on a held-out example" means.
-
-### F3 — Linguistic-Habits axis gate
-
-**Trigger condition.** PersonaGym-style benchmarks show kiho agents clustering below 4.0 on Linguistic Habits, same as the broader LLM field.
-
-**Sketch.** Add Linguistic Habits as a 7th rubric dimension for roles with user-visible output (PM-facing, research, docs). Keep it omitted from internal IC roles to preserve budget. Promotion via CEO committee.
+Rejected — causes 4× the authoring traffic, compounds researcher budget,
+and produces 4 conflicting skill versions that Phase 3.5 must then reconcile.
+Phase 2 produces the shared recipe; Phase 3.5 reconciles extensions.
 
 ## Grounding
 
-- **Four-field contract + hard per-dimension thresholds.**
-  > **Anthropic Engineering, "Harness design for long-running application development" (Mar 24 2026):** *"Each criterion had a hard threshold, and if any one fell below it, the sprint failed."*
-  Adopted verbatim as per-dim floors in the rubric. The sprint-contract pattern maps to the role-spec planner. https://www.anthropic.com/engineering/harness-design-long-running-apps
-
-- **Four-field subagent contract.**
-  > **Anthropic Engineering, "How we built our multi-agent research system":** *"Each subagent needs an objective, an output format, guidance on the tools and sources to use, and clear task boundaries."*
-  The role-spec template mirrors this contract directly. https://www.anthropic.com/engineering/multi-agent-research-system
-
-- **Heterogeneity vs hivemind.**
-  Allen School / NeurIPS 2025 "Artificial Hivemind" best paper documents correlated-error concerns across 70+ LLMs in open-ended generation — *"raising concerns about groupthink in AI systems that could lead to shared blind spots and correlated errors"*. Candidate diversity on persona / tools / model tier is the committee's only defense against correlated garbage. https://news.cs.washington.edu/2026/01/22/allen-school-researchers-earn-neurips-best-paper-award-for-artificial-hivemind-effect-across-llm-open-ended-generation/
-
-- **Persona drift within 8 rounds.**
-  > **Li et al., arXiv 2402.10962 abstract:** *"we reveal a significant instruction drift within eight rounds of conversations."*
-  Grounds the 8-round persona-stability probe for careful-hire. https://arxiv.org/html/2402.10962v1
-
-- **Work-sample predictive validity.**
-  > **Schmidt & Hunter (1998) meta-analysis:** *"work sample r=0.54, structured interview r=0.51, combined r=0.63"* — work-sample is the highest-validity single method in I/O psychology.
-  Grounds the new work-sample rubric dimension and the role-spec's required `work_sample` field. https://home.ubalt.edu/tmitch/645/articles/McDanieletal1994CriterionValidityInterviewsMeta.pdf
-
-- **MAST failure taxonomy.**
-  Cemri et al., arXiv 2503.13657 — 14 failure modes across 3 categories. Per the paper's Figure 2 (MASFT breakdown): FC1 Specification/System Design ≈ 40%, FC2 Inter-Agent Misalignment ≈ 35%, FC3 Task Verification/Termination ≈ 25%. Grounds the Failure playbook's decision tree and the role-spec planner's role in preventing FM-1.1 (disobey task spec) and FM-1.2 (disobey role spec). https://arxiv.org/abs/2503.13657
+- **Four-candidate hard floor.** User direction: *"4 is absolute minimum
+  always."* Matches MAST FM-1 evidence (Cemri et al., arXiv 2503.13657) that
+  3+ heterogeneous candidates break correlated-error failure mode; 4 gives
+  the synthesis path material to work with.
+- **Synthesis when complementary.** User direction and Anthropic harness
+  doctrine (`references/ralph-loop-philosophy.md`): merging two strong
+  imperfect agents into one better agent is cheaper than interviewing a
+  fifth candidate from scratch.
+- **Phase 2 design-validate-fill-validate.** User direction: *"think what
+  skill that agent need, design agent, validate, fill back skill,
+  validate."* Encodes that as a bounded iterative loop.
+- **Memory-seed.** v5 careful-hire produced empty memory dirs — observed in
+  33Ledger `eng-backend-ic-01`, `eng-frontend-ic-01`, `eng-qa-ic-01`,
+  `pm-ic-01` per v6 plan §2 Cluster A2.
+- **Anthropic sprint-contract pattern** — *"Each criterion had a hard
+  threshold, and if any one fell below it, the sprint failed."* Preserved
+  as per-dim floors in Phase 4 rubric.
+- **Schmidt & Hunter (1998) work-sample r=0.54** — ground for Phase 4
+  work-sample dimension. Highest-validity single hiring predictor.

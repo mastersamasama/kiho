@@ -54,6 +54,8 @@ knowledge_update: true
 
 Create the committee directory at `<project>/.kiho/committees/<date>-<slug>/` using `templates/index.template.md`. Populate `index.md` with frontmatter. Initialize an empty `transcript.md` from `templates/transcript.template.md`.
 
+**Language pre-check (v6 §3.7 propagation).** Before writing the first transcript header, invoke `python ${CLAUDE_PLUGIN_ROOT}/bin/brief_builder.py read-language --settings $COMPANY_ROOT/settings.md` via Bash. If the returned value is non-empty (e.g. `zh-TW`), record it at the top of `index.md` frontmatter as `transcript_language: <value>` and write EVERY subsequent transcript message body in that language (agent name labels and phase tags stay in English for parseability; the content prose and rationale follow the company language). If empty / helper unavailable: default to English (v5 behavior). Log `action: committee_language_set, value: <value|en>`.
+
 ## Round structure
 
 Each round has five phases executed sequentially:

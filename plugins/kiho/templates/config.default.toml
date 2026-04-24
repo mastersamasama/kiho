@@ -56,6 +56,121 @@ max_committee_rounds = 3
 # this do NOT permit close, they force another round or escalation.
 committee_no_doubt_confidence = 0.90
 
+# ---- v6 recruit (gap-healing reflex; overridden by $COMPANY_ROOT/settings.md) ----
+#
+# Plugin-level fallbacks only. When $COMPANY_ROOT/settings.md exists, the
+# `recruit:` block there wins key-by-key. See references/company-settings-schema.md.
+
+[recruit]
+# Auto-fire recruit when a capability gap is detected (RACI fail OR mid-wave).
+# false = fall back to v5 behavior (ASK_USER on gap).
+auto_trigger_on_gap = true
+
+# Hard minimum candidates per recruit. v6 drops quick-hire/careful-hire split.
+min_candidates_always = 4
+
+# Rubric score required to close the hiring committee.
+committee_gate_threshold = 4.0
+
+# Synthesize top-2 when scores are close AND strengths non-overlapping.
+synthesis_when_complementary = true
+synthesis_rubric_delta_max = 0.20
+
+# Populate hired agent's memory/ at Phase 6.
+memory_seed_on_hire = true
+
+# Runaway guard — more auto-recruits than this in a turn triggers user prompt.
+max_auto_recruits_per_turn = 2
+
+# Recruit Phase 2: research + author skills missing from the company library
+# BEFORE Phase 3 candidate design.
+skill_research_before_design = true
+
+# Cap on new skills authored by one recruit; overflow → split into multiple.
+max_skills_authored_per_recruit = 3
+
+# ---- v6 skill library ----
+
+[skill_library]
+# Promote research to skills when referenced ≥ reuse_threshold_count times.
+auto_consolidate_research = true
+reuse_threshold_count = 2
+
+# Consolidation cycle cadence — run consolidate-skill-library skill on
+# whichever trigger fires first. 0 disables.
+consolidate_cadence_days = 30
+consolidate_cadence_new_skill_count = 5
+
+# Skills with zero invocations in this many days AND no dependents are
+# candidates for deprecation.
+stale_days = 60
+
+# ---- v6 KB consolidation ----
+
+[kb_consolidation]
+# consolidate-project-kb runs every N CEO turns per project.
+project_kb_cadence_turns = 10
+# consolidate-company-kb runs every M days OR after P cross-project turns.
+company_kb_cadence_days = 30
+company_kb_cadence_turns = 20
+
+# ---- v6 startup ----
+
+[startup]
+# Read $COMPANY_ROOT/settings.md + company/wiki/index.md + skills/INDEX.md
+# at every INITIALIZE. Disable only for debugging.
+read_company_wiki_on_init = true
+read_settings_on_init = true
+
+# Warn when company KB files are stale.
+warn_if_stale_days = 7
+
+# Warn when an agent has `active_project = <this>` but mtime < project mtime.
+warn_if_agent_mtime_older_than_project = true
+
+# ---- v6 scope boundary (CEO DONE scope-promote sweep) ----
+
+[promote]
+# CEO DONE step 3 runs scope-promote-classifier against new files created
+# this turn in .kiho/audit/** and .kiho/state/research/**.
+auto_scope_classify_on_done = true
+
+# Dry-run diff presented to user before any $COMPANY_ROOT write.
+dry_run_before_write = true
+
+# ---- v6 performance amplification ----
+
+[performance]
+# Rank existing skills in USE/IMPROVE/CREATE decision (Phase 2.3, Phase 3.5)
+# via success_rate × (1 − correction_rate) × freshness.
+rank_skills_by_performance = true
+
+[performance.rank_weights]
+# Must sum to 1.0. Used by design-agent to pick among competing skills.
+success_rate = 0.5
+inverse_correction_rate = 0.3
+freshness = 0.2
+
+# ---- v6 external skill referencing ----
+
+[external_skills]
+# Allow skills to reference other plugins' skills via the skill's `references:`
+# frontmatter (e.g., onchainos:okx-dex-token, firecrawl:firecrawl).
+allow_references = true
+
+# TTL on the external-skills catalog cache at
+# $COMPANY_ROOT/external-skills-catalog.json.
+catalog_ttl_days = 7
+
+# ---- v6 language & tone (propagates to committee, briefs, CEO narration) ----
+
+[tone]
+# Set to "zh-TW", "zh-CN", "ja", etc. at $COMPANY_ROOT/settings.md for live
+# propagation. Plugin default = en for new installs with no company settings.
+official_language_fallback = "en"
+formality_fallback = "collaborative-formal"
+emoji_in_agent_output_fallback = false
+
 # ---- Ralph loop safety ----
 
 # Hard cap on Ralph loop iterations per /kiho turn.

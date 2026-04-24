@@ -86,7 +86,16 @@ first_90_day_brief: <bool>        # default true
 
 7. **Notify the dept lead.** `memo-send to=<dept-lead> severity=fyi` with the onboarding summary. The lead is `informed`, not action-required — the mentor is the action owner.
 
-8. **Return refs.** Response shape below.
+8. **Schedule individual-OKR proposal (v6.2+).** If `[okr.auto_set] individual_on_onboard == true` in config (default: true), enqueue a deferred action that fires when this agent reaches `[okr.auto_set] onboard_threshold_iter` iterations (default: 30). Implementation: write a todo into the mentor's memory with kind=lesson-followup and body `"At iteration <N+threshold>, memo HR-lead to dispatch individual-O drafting for <agent_id>. See skills/core/okr/okr-individual-dispatch/SKILL.md."`. The mentor's next `memory-reflect` surfaces this as a trigger; HR-lead then invokes `okr-individual-dispatch single_agent=<agent_id>` which runs the single-agent variant of the dispatch flow. On dispatch, the new agent gets its first brief to draft an individual O based on the experience it's accumulated over those N iterations.
+
+   Skip this step if:
+   - `[okr] auto_trigger_enabled == false` (master switch off)
+   - `[okr.auto_set] individual_on_onboard == false` (feature disabled)
+   - The dept has no active dept-O for the current period (no parent to align to; OKR-master's cascade-dept sweep will fire on its own cadence)
+
+   Log `action: okr_individual_schedule_onboard, agent: <id>, fires_at_iteration: <N+threshold>`. This is a schedule, not a direct invocation — v6.2 runs the actual dispatch when the agent has memory to cite.
+
+9. **Return refs.** Response shape below.
 
 ## Response shape
 

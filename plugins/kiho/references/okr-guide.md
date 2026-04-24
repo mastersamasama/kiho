@@ -71,7 +71,35 @@ The atomic primitives (`okr-set`, `okr-checkin`, `okr-close`) remain functional 
 |---|---|---|---|
 | **Company** | You, the employer | User accepts via `AskUserQuestion` — the skill refuses to emit without a `USER_OKR_CERTIFICATE:` marker | "Ship the v5.23 OA integration with zero regressions to v5.22 hook behavior by 2026-06-30." |
 | **Department** | Dept-lead (eng-lead, hr-lead, pm-lead, etc.) via a committee | Requires a closed `decisions/<dept>-okr-<period>.md` committee decision page as prerequisite | "Engineering: reduce mean approval-chain wall-clock from 45s to 20s by 2026-06-30." |
-| **Individual** | Agent proposes; dept-lead approves via the `okr-individual` approval chain (v5.23 shipped in approval-chains.toml) | Requires `DEPT_LEAD_OKR_CERTIFICATE:` marker emitted by the dept-lead after review | "@kiho-eng-lead: close 80% of opened cycles within budget in 2026-Q2." |
+| **Individual** | HR-lead dispatches agent with experience-using brief (v6.2+); agent drafts from own memory; lightweight 1-round committee (dept-lead + HR-lead + OKR-master ± user) reviews; dept-lead approves via the `okr-individual` approval chain | Requires `DEPT_LEAD_OKR_CERTIFICATE:` marker emitted by the dept-lead after review | "@kiho-eng-lead: close 80% of opened cycles within budget in 2026-Q2." |
+
+### Individual OKR flow in detail (v6.2+)
+
+The individual-O flow is the most elaborate because it's the one layer where automation meets agent agency. Here's what happens end-to-end:
+
+1. **Trigger** — either (a) the scanner's `cascade-individual` action fires for a dept-O, or (b) a new agent's `onboard` skill completes its `onboard_threshold_iter` (default 30) iterations.
+
+2. **HR-lead filters candidates** — reads `capability-matrix.md` + `agent-score-<period>.jsonl`. Keeps agents with ≥ 3 proficiency on any skill aligned to the dept-O's scope, and (if score exists) score ≥ 0.70. Excludes agents who already have an active individual O this period. Caps to `[okr.auto_set] individual_max_per_dept` (default 5) per department.
+
+3. **Agent drafts from experience** — HR-lead spawns each candidate as a sub-agent with the `agent-brief.md` template. The brief REQUIRES the agent to invoke `memory-query` four times (last 5 lessons, pending todos, recent high-importance observations, own agent.md soul) before writing a single word of the draft. The returned structured JSON MUST include a `rationale_from_lessons` array citing ≥ 1 memory ref.
+
+4. **HR-lead validates** — structural check: O is one sentence, KR count in [3, 5], weights sum ≤ 100, at least one KR `derivable_from_cycle_events: true`, rationale cites actual memory refs (regex-checked). Invalid drafts get one memo cycle back; max 3 iterations before forced reject.
+
+5. **Lightweight 1-round review committee** — convened per validated draft:
+   - **Members**: dept-lead (domain) + HR-lead (workforce) + OKR-master (cross-cutting alignment)
+   - **Optional 4th seat**: user, invoked when ≥ 1 of four flags is true — agent has < 30 onboard iters, no prior closed OKR, score < 0.70, or draft has 5 KRs (ambition flag)
+   - **Phases**: research → choose (suggest + challenge skipped per lightweight variant)
+   - **Close rule**: unanimous APPROVE + confidence ≥ 0.90 OR unanimous REJECT; split goes to REVISE
+   - **Transcript**: `.kiho/committees/okr-indiv-<agent>-<period>/transcript.md`
+
+6. **Outcome dispatch**:
+   - **Approve**: dept-lead emits `DEPT_LEAD_OKR_CERTIFICATE` as the committee's closing act; HR-lead invokes `okr-set level=individual` with the approved draft + certificate; PreToolUse hook verifies certificate; file lands at `.kiho/state/okrs/<period>/O-<period>-individual-<agent>-<n>.md`.
+   - **Revise**: HR-lead aggregates feedback into one memo; agent has 2 more tries (max 3 total); on 3rd failure, force-reject.
+   - **Reject**: `rejection-feedback` skill composes a structured rejection memo; no individual O this period; agent's contribution measured by dept-O rollup + cycle-outcome score.
+
+7. **Execution**: once the O is emitted, its KRs update automatically as the agent's owned cycles close (cycle-runner `on_close_success` hook dispatches `okr-checkin` with conservatively-derived score deltas).
+
+This flow is the load-bearing demonstration that kiho is a full-auto org — an agent never has to wait for the user to think about its OKR; the user only accepts (or dismisses) company Os. Everything else cascades through the organization on its own.
 
 Every non-company Objective has an `aligns_to: <parent-O-id>` field in its frontmatter. This creates a tree — individual Os align to department Os, which align to company Os. You can read the tree top-down (company vision → departments → agents) or bottom-up (agent tasks → which company Objective does this serve?). That's the entire point of OKRs.
 

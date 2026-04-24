@@ -116,6 +116,18 @@ This formula compensates for LLM overconfidence. A unanimous committee at 0.92 a
 - Knowledge_update: true (the resolution becomes a new decision page)
 - Reversibility: reversible
 
+### Lightweight committee (v5.23+)
+- Members: minimum 2, maximum 3 (plus clerk)
+- Topic: a single closed question, binary or ≤5-option multiple-choice
+- Max rounds: 1 (one-round cap, not 3)
+- Phases: `research` + `choose` REQUIRED; `suggest` and `challenge` OPTIONAL and typically skipped (emit `- (no entries this round)` placeholder)
+- Close threshold: standard (unanimous + no unresolved challenges + aggregate ≥ 0.90 — no relaxation)
+- Use case: fast signal capture on a narrow question where 3-round deliberation is overkill (e.g., a pulse-style "did this process work?" check, a binary "should we roll back?" poll)
+- Escalation: if unanimous close fails in the single round, escalate to CEO per the standard escalation decision table — there is no RECONVENE for the lightweight variant (adding rounds means you should have used a regular committee from the start)
+- Transcript: same format as a regular committee; `rounds_used: 1` in the Close block
+
+Introduced by decision `04-committee-pulse/decision.md` (v5.23 planning) as the codified form of "small committee with fewer rounds" that several previous debates resolved by convention.
+
 ### Storage-fit committee (v5.19+)
 - Members: proposer + kb-manager + a relevant department lead (domain of affected data class)
 - Topic: "Add row X to `references/data-storage-matrix.md`" OR "Change tier/tech/eviction for existing row X" OR "Promote DEFERRED row X to active"

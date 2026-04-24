@@ -42,24 +42,26 @@ Scope picks the time window and the framing:
 
 Pull the pre-read bundle without interpreting it yet:
 
+- **Dashboard (v5.23+)** — invoke `python ${CLAUDE_PLUGIN_ROOT}/bin/dashboard.py --project <project> --period per-cycle --cycle-id <id>` (or `--period quarterly --quarter YYYY-QN` at quarter close) BEFORE anything else. If the dashboard file `<project>/.kiho/state/dashboards/<label>.md` is absent or stale (older than the latest cycle-events.jsonl entry), the script regenerates it. Read the resulting markdown into context — it anchors the retrospective narrative in concrete numbers. Per decision `dashboard-analytics-2026-04-23`.
 - `memory-query` for each participant over `time_window`, filtered to observations with importance >= 8.
 - `storage-broker` op=`query` on `state/standups/<YYYY-WW>` for every week touched by the window, filtered to `participants`.
 - `storage-broker` op=`read` on the ceo-ledger rows for the turn(s) in scope.
 - If `scope == incident`, fetch the postmortem artifact via its ref.
 - If `metrics_ref` provided, read the agent-performance window.
 
-Hard budget: 90 seconds for gather. If a query is slow, shrink the window rather than block.
+Hard budget: 90 seconds for gather. If a query is slow, shrink the window rather than block. Dashboard regeneration is typically <2s on any project size.
 
 ### 2. Synthesize
 
-Assemble four sections. Each is a bulleted list of one-line items with evidence refs — not essays.
+Assemble five sections. Each is a bulleted list of one-line items with evidence refs — not essays.
 
 - **went_well** — patterns that produced value. Every bullet cites at least one standup or ledger ref.
 - **hurt** — patterns that cost time or trust. Blameless: describe the situation, not the agent.
+- **process_friction** — (v5.23+) each participant's one-sentence answer to: *"What in this period's process blocked or slowed you? Answer 'nothing' if nothing did."* One bullet per participant; non-optional. If the `nothing`-to-`specific` ratio drops below 50%, emit a `values-flag` with topic `process-friction` so the next `values-alignment-audit` picks it up. Replaces ad-hoc pulse surveys — see `references/committee-rules.md` §Lightweight committee for the related lightweight-poll pattern.
 - **systemic** — observations that generalize beyond this scope. A systemic observation names a recurring shape (e.g., "blockers around credential rotation appear every 3rd sprint") not a one-off.
 - **actions** — concrete follow-ups. Each action has `owner`, `due_iteration`, and `success_criterion`.
 
-The blameless linter is shared with postmortem: it flags any bullet naming an agent in a hurt or systemic context without a situational frame. Rewrite flagged bullets before proceeding to step 3.
+The blameless linter is shared with postmortem: it flags any bullet naming an agent in a hurt, process_friction, or systemic context without a situational frame. Rewrite flagged bullets before proceeding to step 3.
 
 ### 3. Persist the retrospective artifact
 
@@ -85,6 +87,10 @@ PAYLOAD:
 
     ## What hurt
     - ...
+
+    ## Process friction (one bullet per participant; 'nothing' is valid)
+    - **<participant>** — <one sentence>
+    ...
 
     ## Systemic observations
     - ...

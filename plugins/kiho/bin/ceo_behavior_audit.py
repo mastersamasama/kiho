@@ -255,6 +255,58 @@ def check_recruit(entry: dict, project_root: Path, drifts: list[Drift]) -> None:
             )
 
 
+def check_approval_chains(entries: list[dict], drifts: list[Drift]) -> None:
+    """Verify approval_chain_closed:granted entries have all stages logged.
+
+    A chain is declared complete by an `approval_chain_closed` ledger entry
+    with `outcome: granted`. Every stage of the chain (per
+    `references/approval-chains.toml`) MUST have a corresponding
+    `approval_stage_granted` entry in the same ledger window before the
+    close entry. Missing stages = skipped stages = approval_chain_skipped
+    drift (CRITICAL).
+
+    Introduced by decision: approval-chains-2026-04-23 (v5.23).
+    Lazy import of approval_chain module — audit stays runnable even if
+    the registry is unavailable (degrades to no-op on this check).
+    """
+    try:
+        here = Path(__file__).resolve().parent
+        if str(here) not in sys.path:
+            sys.path.insert(0, str(here))
+        import approval_chain  # type: ignore
+    except Exception:
+        return  # registry unavailable; silent no-op for this check
+
+    for entry in entries:
+        if entry.get("action") != "approval_chain_closed":
+            continue
+        payload = entry.get("payload") or {}
+        if payload.get("outcome") != "granted":
+            continue
+        chain_id = payload.get("chain_id")
+        if not chain_id:
+            continue
+        # Only consider stage_granted entries that appear BEFORE this close.
+        close_seq = entry.get("seq")
+        prior = [
+            e
+            for e in entries
+            if (close_seq is None or (e.get("seq") or -1) < close_seq)
+        ]
+        ok, missing = approval_chain.verify_ran(chain_id, prior)
+        if not ok and missing:
+            drifts.append(
+                Drift(
+                    entry.get("seq"),
+                    "critical",
+                    "approval_chain_skipped",
+                    chain_id,
+                    f"missing stage_granted entries: {missing}",
+                    "chain closed but some stages never logged; forged certificate or skipped stage",
+                )
+            )
+
+
 def summarize(drifts: list[Drift]) -> dict:
     by_sev: dict[str, list[Drift]] = {"critical": [], "major": [], "minor": []}
     for d in drifts:
@@ -301,7 +353,11 @@ def main() -> int:
         project_root = ledger.resolve().parent
 
     drifts: list[Drift] = []
+    # First pass: per-entry checks. Collect entries for the second-pass
+    # cross-entry check (approval-chain verification).
+    collected: list[dict] = []
     for entry in iter_ledger(ledger, args.turn_from, skip_pre_epoch=not args.full):
+        collected.append(entry)
         action = entry.get("action", "")
         if action == "delegate":
             check_delegate(entry, drifts)
@@ -309,6 +365,10 @@ def main() -> int:
             check_kb_add(entry, project_root, drifts)
         elif action == "recruit":
             check_recruit(entry, project_root, drifts)
+
+    # Second pass (v5.23+): approval-chain verification — needs the full
+    # entry list so we can correlate chain_closed with prior stage_granted.
+    check_approval_chains(collected, drifts)
 
     summary = summarize(drifts)
 

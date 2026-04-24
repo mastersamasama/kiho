@@ -632,6 +632,83 @@ regeneration:   raw; not regenerable — archived or deleted
 review:         occasional
 ```
 
+### dashboard-period-md — NEW (v5.23+)
+```
+tier:           T2
+scope:          project
+format:         markdown (generated)
+path:           <project>/.kiho/state/dashboards/<period>.md
+gatekeeper:     bin/dashboard.py
+read:           retrospective ceremony (at open); reader on demand
+write:          regenerable from telemetry; on-demand via script
+shape:          fixed sections (Velocity / Reliability / Hiring / Committees / Skill factory / KB / Agent scores)
+cardinality:    small (≤20 per year — per-cycle + quarterly)
+regeneration:   python bin/dashboard.py --project <path> --period per-cycle|quarterly ...
+review:         machine-only
+tech-stack:     §3 markdown canonical (generated view — idempotent modulo Generated: header)
+notes:          Consumers: retrospective ceremony opens by loading the dashboard; agent-promote committee cites top/bottom 5 scores; skill-evolution committee cites factory pass/reject rates; kb-lint health check cites pages_added_rate. Introduced by committee `dashboard-analytics-2026-04-23`. Metric 7 (agent scores) soft-depends on `agent-cycle-score-jsonl` from committee 05.
+```
+
+### agent-cycle-score-jsonl — NEW (v5.23+)
+```
+tier:           T2
+scope:          project
+format:         JSONL
+path:           <project>/.kiho/state/agent-score-<period>.jsonl
+gatekeeper:     bin/agent_cycle_score.py
+read:           bin/dashboard.py (metric 7); agent-promote committee
+write:          per-period (invoked at retro / quarter close)
+shape:          {period, agent, score, breakdown{invocation_rate, phase_owner_rate, committee_win_rate, kb_weight}, generated_at}
+cardinality:    small (≤ org-size per period)
+regeneration:   python bin/agent_cycle_score.py --project <path> --period <label>
+review:         committee (promotion criteria — any score < 0.70 flagged)
+tech-stack:     §4 JSONL append-only
+notes:          Formula: 0.4 × invocation_rate + 0.3 × phase_owner_rate + 0.2 × committee_win_rate + 0.1 × kb_weight. Introduced by committee `perf-review-360-2026-04-23`. Weighting is speculative at ship time; recalibration committee scheduled at end of v5.23 period.
+```
+
+### okrs-period-md — NEW (v6.1+)
+```
+tier:           T1
+scope:          project
+format:         markdown + YAML frontmatter
+path:           <project>/.kiho/state/okrs/<period>/O-<period>-<level>-<slug>-<n>.md
+                where level ∈ {company, dept-<dept>, individual-<agent>}
+                period ∈ {YYYY-QN | YYYY-HN | YYYY-<slug>}
+gatekeeper:     skills/core/okr/okr-set (emit); skills/core/okr/okr-checkin + okr-close (update)
+read:           retrospective ceremony; bin/dashboard.py (metric 7 fallback);
+                agent-promote step 2a; cycle-runner (optional aligns_to_okr in cycle index.toml)
+write:          per-period creation + per-checkin update + close
+shape:          frontmatter (o_id, okr_level, period, owner, aligns_to, status, weights, certificate)
+                + ## Key Results section (weighted) + ## Check-ins + optional ## Close
+cardinality:    small (≤50 per period per project)
+eviction:       move closed files to .kiho/state/okrs/<period>/_closed/ 30 days post close
+review:         committee (department level); user-gated (company level)
+tech-stack:     §3 markdown canonical
+notes:          Each level has its own approval chain in references/approval-chains.toml:
+                okr-company (USER_OKR_CERTIFICATE), okr-department (DEPT_COMMITTEE_OKR_CERTIFICATE),
+                okr-individual (DEPT_LEAD_OKR_CERTIFICATE). PreToolUse hook enforces certificate
+                presence; skill-internal pre-emit gate enforces prerequisites. Introduced by
+                decision `okr-framework-2026-04-23`. User-facing primer at references/okr-guide.md.
+```
+
+### announcements — NEW (v5.23+)
+```
+tier:           T1
+scope:          both
+format:         markdown + YAML frontmatter
+path:           <project>/.kiho/state/announcements/<yyyy-mm-dd>-<slug>.md
+                $COMPANY_ROOT/state/announcements/<yyyy-mm-dd>-<slug>.md
+gatekeeper:     memo-send (wildcard emission); kiho-comms (re-surface)
+read:           shift-handoff re-surface sweep; memo-inbox-read lookup
+write:          per-broadcast
+shape:          frontmatter (id, emitter, audience, pinned_until, ack_required, ack_by, basis) + prose body
+cardinality:    small (≤100 per project)
+eviction:       archive to `.kiho/state/announcements/_archive/` 90 days after pinned_until expiry
+review:         committee (durable-invariant announcements promote to rules.md via kb-manager)
+tech-stack:     §3 markdown canonical (see storage-tech-stack.md)
+notes:          distinct from `memo-inbox` jsonl — announcements are bulletin-board (all audience matches read), not mailbox (single recipient). Basis field required when emitter is NOT CEO and NOT a dept-lead; must cite a closed committee decision path. Introduced by committee `broadcast-announcements-2026-04-23`.
+```
+
 ---
 
 ## 8. Derived indexes

@@ -6,6 +6,208 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.1.0 (v5.23 OA-integration — all six committees landed)
+
+Committee-driven delta landed from `_proposals/v5.23-oa-integration/` (six committees closed unanimously at confidence ≥ 0.90 per `/kiho` planning turn 2026-04-23 and implementation turn 2026-04-24). Phase ordering followed `_proposals/v5.23-oa-integration/99-v5.23-roadmap.md`. **Five of six committees rejected adding new skill portfolios in favor of minimal extensions + small scripts on existing primitives** — only committee 01 OKR produces new skills (three). Net release scope: 3 new skills, 5 new Python helpers, 5 new data-storage-matrix rows, 5 approval chains (was 2), zero new agent roles, zero new PreToolUse hook scripts.
+
+### Shipped — Phase A (pulse + broadcast)
+
+1. **Committee 04 — pulse surveys (rejected new surface, three small reinforcements).** Documented `lightweight-committee` variant in `references/committee-rules.md` §Special committee types (min 2 members, 1-round cap, `research + choose` phases required, `suggest + challenge` optional). Added mandatory `process_friction` section to `skills/core/ceremony/retrospective/SKILL.md` — each participant's one-sentence answer to "What in this period's process blocked or slowed you?". Shipped `bin/pulse_aggregate.py` (stdlib-only, reads `values-flag.jsonl`, groups by topic with threshold-flagging).
+
+2. **Committee 03 — broadcast (minimal extension).** Added wildcard recipients to `memo-send` SKILL: `@all`, `@dept:<name>`, `@capability:<verb>`. Wildcard emission auto-emits to the new `.kiho/state/announcements/<yyyy-mm-dd>-<slug>.md` Tier-1 surface (bulletin-board distinct from mailbox). Introduced `announcements` row in `references/data-storage-matrix.md`. Extended `shift-handoff` ceremony with an `unread-announcements` fifth section and the corresponding digest count. Added ledger actions `announcement_published` + `announcement_acknowledged`. Emission RACI: CEO / dept-leads emit freely; other agents require `basis: <committee-decision-path>` pre-emit check (skill-internal gate — no PreToolUse hook needed).
+
+### Shipped — Phase B (infrastructure)
+
+3. **Committee 02 — approval chains (declarative registry replaces Python-baked hooks).** Shipped `references/approval-chains.toml` with three chain definitions (`recruit-hiring`, `kb-writes`, `okr-individual`) — the existing v5.22 patterns re-expressed declaratively plus the new OKR chain from committee 01. Shipped `bin/approval_chain.py` helper (TOML loader, path→chain matcher, certificate-marker lister, `verify_ran` ledger-stage auditor; `--validate` / `--list-chains` / `--chain-for-path` CLI). Unified `bin/hooks/pre_write_agent.py` + `pre_write_kb.py` into single chain-aware `bin/hooks/pre_write_chain_gate.py` — reads `approval-chains.toml` at runtime and blocks any Write/Edit to a governed path lacking the chain's certificate_marker. Adding a new chain is now ≤ 20 lines of TOML with zero Python edits. `hooks.json` updated to register the unified gate for `Write|Edit`; old scripts kept as deprecation shims that delegate to the new gate. Extended `bin/ceo_behavior_audit.py` with `approval_chain_skipped` CRITICAL drift class — catches a chain_closed:granted ledger entry missing any `approval_stage_granted` entries. Added 13 unit tests covering schema validation, path matching, and verify_ran correctness (all 26 total tests — v5.22 + v5.23 — pass).
+
+4. **Committee 06 — dashboard (regenerable T2).** Shipped `bin/dashboard.py` with six metrics (velocity, reliability + MTTR, hiring, committees, skill factory, KB) sourced entirely from existing JSONL streams + committee transcript close blocks. Per-cycle and quarterly periods. Output to `.kiho/state/dashboards/<period>.md` (new matrix row `dashboard-period-md`). Each metric gates its own inclusion by a named downstream consumer per cost-hawk veto rule — no decorative metrics. Integrated into `retrospective` SKILL's step 1 Gather — retrospectives open by loading the dashboard so narrative anchors to numbers. The seventh metric (top/bottom agent scores) stubs to "unavailable" until the agent-score JSONL from Phase C1 lands.
+
+### Shipped — Phase C1 (quantitative performance)
+
+5. **Committee 05 — agent cycle-outcome score (rejected peer-360, adopted telemetry-derived quantitative score).** Shipped `bin/agent_cycle_score.py` with formula `0.40 × invocation_rate + 0.30 × phase_owner_rate + 0.20 × committee_win_rate + 0.10 × kb_weight`. Output to `.kiho/state/agent-score-<period>.jsonl` (new matrix row `agent-cycle-score-jsonl`). Auditor personas (skeptic, pragmatist, cost_hawk, overlap_hunter) are excluded from `committee_win_rate` so challenging well-supported positions cannot depress their score. `agent-promote` SKILL step 2a added — promotion committees MUST cite the cycle-outcome score alongside capability-matrix + narrative; score < 0.70 hard-blocks `promote` / `cross_train` lateral widening unless committee decision explicitly counter-argues with cited evidence. Threshold and weighting are speculative at ship time; a recalibration committee is scheduled at end of the v5.23 period per decision.md explicit flag. Metric 7 in `bin/dashboard.py` automatically picks up the agent-score JSONL once emitted.
+
+### Shipped — Phase C2 (OKR skill portfolio)
+
+6. **Committee 01 — OKR framework (3 new skills + user-facing primer).** Authored `core/okr/` with `okr-set` (sk-080, capability `create`), `okr-checkin` (sk-081, capability `update`), `okr-close` (sk-082, capability `update`). All three skills gate against Tier-1 markdown at `<project>/.kiho/state/okrs/<period>/O-<period>-<level>-<slug>-<n>.md` per the new `okrs-period-md` data-storage-matrix row. `okr-set` enforces a RACI pre-emit gate per level: `company` → user-accept via `AskUserQuestion` (`USER_OKR_CERTIFICATE`), `department` → closed committee decision page prerequisite (`DEPT_COMMITTEE_OKR_CERTIFICATE`), `individual` → dept-lead approval via the existing `okr-individual` chain (`DEPT_LEAD_OKR_CERTIFICATE`). The approval-chains registry now has FIVE chains (was 3 at Phase B1 landing) — two added for OKR: `okr-company` and `okr-department`. `okr-checkin` appends per-KR history with > 0.20 regression detection via `values-flag`. `okr-close` computes weighted-mean aggregate with stretch KRs capped at 0.7, marks `status: closed`, optionally archives to `_closed/`. New user-facing primer at `references/okr-guide.md` covers when to set OKRs, the three levels, how OKRs help (alignment / focus / measurement) and — critically — how the framework makes **kiho itself** better (cycles can `aligns_to_okr`, dashboard metric 7 rolls up closed OKR scores, retrospectives get quantitative anchors, `agent-promote` step 2a cites closed individual OKRs as promotion evidence). `bin/dashboard.py` metric 7 automatically surfaces OKR aggregates once files exist. CATALOG.md routing block updated with `core.okr` sub_domain. Skill-factory 10-step pipeline was NOT invoked (factory targets greenfield authoring from user intent); instead the skills were authored directly with frontmatter-schema + authoring-pattern compliance, following the recruit/agent-promote precedent for hand-authored core skills. Cadence is explicit — no auto-triggers — matching the committee decision.
+
+### Release posture — v6.1.0
+
+- **Version bumped.** `plugin.json` 6.0.0 → **6.1.0**. `marketplace.json` was stale at 5.22.0 → synced to **6.1.0** with description reflecting the full v5.23 landing. Marketplace `metadata.version` bumped 1.0.0 → 1.1.0 to reflect the marketplace-manifest update itself.
+- **Keyword additions**: `v5.23`, `v6.1.0`, `approval-chains`, `okr`, `dashboard`, `cycle-outcome-score`.
+- **CLAUDE.md invariant additions — pending.** Committee 02 noted that `approval-chains-are-TOML-declared` MAY become a load-bearing invariant once in-the-wild use confirms no edge cases. Deferred to v6.2 after first real-project adoption.
+- **Replay harness scenarios** (v5.22 shipped) should gain (a) approval-chain-skipped drift (CRITICAL, exit 3), (b) broadcast wildcard emission without basis (status: broadcast_basis_required), (c) OKR-set at each of the three levels with the pre-emit gate exercised. Deferred to v6.2 — harness addition is a separate cycle.
+
+### Test regression
+
+- All 26 unit tests pass (13 existing v5.22 `ceo_behavior_audit` + 13 new v5.23 `approval_chain`). Manual smoke verified:
+  - Chain gate blocks all three OKR paths without certificate (exit 2) and allows with certificate (exit 0). All 5 chains pass `--validate`.
+  - Dashboard renders 7-metric rollup from synthetic telemetry; idempotent modulo `Generated:` header.
+  - Agent cycle score computes 0.867 / 0.900 / 0.050 for three-agent synthetic case with auditor exclusion verified.
+  - Pulse aggregate correctly identifies threshold-exceeded topics within the window.
+  - OKR hook gate distinguishes company vs department vs individual paths via terminal_path_pattern — no chain cross-talk.
+
+### Summary for readers
+
+- **3 new skills** (`okr-set`, `okr-checkin`, `okr-close`)
+- **5 new Python helpers** (`approval_chain.py`, `pre_write_chain_gate.py` unified, `dashboard.py`, `agent_cycle_score.py`, `pulse_aggregate.py`)
+- **5 new data-storage-matrix rows** (`announcements`, `dashboard-period-md`, `agent-cycle-score-jsonl`, `okrs-period-md`, implicit via approval-chains.toml)
+- **5 approval chains** in `references/approval-chains.toml` (was 2 pre-v5.23)
+- **1 user-facing reference** (`references/okr-guide.md`)
+- **~2,700 lines** total across ~15 modified files + 9 new files
+- **26 passing unit tests** (13 existing + 13 new); zero regression on v5.22 hook behavior
+
+---
+
+## v6.0.0 (PR #3 — final auto-evolution wave)
+
+PR #3 closes the v6 evolution arc opened by PR #1 (non-behavioral scaffolding: templates, config, lint) and PR #2 (universal gap-healing reflex: recruit v6, auto-recruit on capability gap, settings propagation foundation). v6.0.0 turns kiho into a self-healing organization: missing files are auto-scaffolded inline, v5 agents auto-migrate on first v6 turn, the skill library and both KBs consolidate on cadence, external plugin skills are discoverable and referenceable (not re-implementable), skill ranking is performance-driven, and every retrieval flows through a single unified-search primitive.
+
+### A. Self-healing + settings propagation (§3.7)
+
+1. **`kiho-setup` auto-scaffolds missing files.** New targeted ops: `scaffold-settings` (writes `$COMPANY_ROOT/settings.md` from the PR #1 template), `scaffold-project-registry` (seeds detected projects from `$CLAUDE_PROJECTS`), `scaffold-company-index` (`$COMPANY_ROOT/company/wiki/index.md` shell), `scaffold-skills-index` (`$COMPANY_ROOT/skills/INDEX.md` shell). Each op is non-destructive (skips non-empty files) and callable inline by the CEO without running the full scaffolder.
+
+2. **CEO INITIALIZE step 1 extended.** Reads plugin `config.toml`, then `$COMPANY_ROOT/settings.md` (merged key-by-key, company wins), then `company/wiki/index.md` + `skills/INDEX.md` + `project-registry.md`. Missing files trigger inline `kiho-setup op=scaffold-*` (non-blocking). Logs per action (`company_settings_merged`, `company_wiki_index_read`, `skill_library_size`, `project_registry_loaded`). New debug opt-out: `settings.startup.read_settings_on_init = false`.
+
+3. **CEO INITIALIZE step 4.5 NEW — auto-migrate v5 agents.** For each `$COMPANY_ROOT/agents/*/agent.md` with `schema_version != 2`, invokes `bin/migrate_v5_to_v6.py --auto-apply`. Script produces `agent.md.v6proposed`, runs `agent_md_lint.py --enforce`, atomic-swaps on clean (keeps `.v5bak` backup) or writes `.migration-blocker` note on violations. Cap of 20 migrations per INITIALIZE guards against flooding; overflow logs `action: migration_cap_hit`.
+
+4. **Settings propagation helpers.** New `bin/brief_builder.py` with `build_company_output_constraints(settings)` producing the `## Company output constraints` block (Output language / Tone / Emoji). CEO's DELEGATE step now pre-pends this block to every brief via a Bash call to `brief_builder.py build-constraints`. Committee skill reads `settings.official_language` before opening a transcript and writes every round's message bodies in that language. Agent labels + phase tags stay in English for parseability.
+
+5. **`bin/migrate_v5_to_v6.py` auto-apply** (contract per `references/agent-schema-v2.md §Migration from v5`): parses v5 frontmatter, extracts project from `role:` → seeds `experience[0]`, strips to `role_generic`, sets `current_state.{availability:"free", active_project: null, last_active:<mtime>}`, preserves skills/tools/soul, seeds `memory/{lessons,todos,observations}.md` with non-empty stubs, writes `schema_version:2, soul_version:v5, hire_provenance.hire_type:"v5-migrated"`, runs lint, swaps atomically on pass. Supports `--dry-run`, `--agent-id`, `--agent-md`, `--all`, `--json`. Exit codes: 0 applied/already-v6/dry-run-proposed; 1 all blocked; 2 usage error.
+
+6. **`bin/agent_md_lint.py --enforce` default.** Exits 1 on any R1-R6 violation. Opt-out via `--warn-only` preserved for alpha-site compatibility. Updated docstring + argparse defaults.
+
+### B. Consolidation cycles (§3.8)
+
+1. **Three new `_meta/` skills:**
+   - `consolidate-project-kb/SKILL.md` — scans `<project>/.kiho/kb/wiki/` for clusters via `bin/embedding_util.py`, drafts `synthesis/<topic>.md`, routes via `kb-manager op=kb-add`
+   - `consolidate-company-kb/SKILL.md` — same clustering at company scope + pair-wise dedupe at similarity ≥ 0.80 via `kb-manager op=kb-update`
+   - `consolidate-skill-library/SKILL.md` — pair-wise feature overlap ≥ 0.70 → `skill-improve` merge; zero invocations ≥ `stale_days` with no dependents → `skill-deprecate`; ≥ 3 improvements in 90 days → `lifecycle: mature` tag proposal
+
+2. **`bin/embedding_util.py` NEW** — cluster + similarity helper with 3-tier backend auto-select (sentence-transformers → sklearn+numpy TF-IDF → pure-Python stdlib TF-IDF). Public API `text_similarity(a,b)`, `cluster_files(paths, threshold)`, `cluster_texts(texts, threshold)`. CLI `similarity` / `cluster` subcommands for debugging.
+
+3. **CEO DONE step 10b NEW — consolidation cadence gate.** Reads `settings.kb_consolidation.*` + `settings.skill_library.*`; three independent gates (project-kb turns, company-kb days OR turns, skill-library days OR new-skill count). Each gate, when fires, invokes the corresponding consolidate skill via kb-manager / hr-lead; proposals route through `AskUserQuestion` when `dry_run_before_write == true` (default). Cadence values ≤ 0 disable individual gates. New ledger `<project>/.kiho/state/consolidation-ledger.jsonl` tracks `last_*_consolidation_ts` + counters.
+
+### C. External skill referencing (§3.9)
+
+1. **Extended SKILL.md schema.** New `references:` block documented in `references/skill-frontmatter-schema.md` with 4 entry types: `internal_skill` (another company skill), `plugin_skill` (e.g. `onchainos:okx-dex-token`), `claude_global_skill` (e.g. `firecrawl:firecrawl`), `external_docs` (URL with purpose). 4-rule validation at authoring time.
+
+2. **`skills/_meta/skill-discover/SKILL.md` NEW.** Scans `$CLAUDE_PLUGINS` (or `~/.claude/plugins/cache/`) for plugin SKILL.md files, parses frontmatter, writes `$COMPANY_ROOT/external-skills-catalog.json` with TTL from `settings.external_skills.catalog_ttl_days` (default 7). Hard-excludes `kiho` itself. Consumed by `skill-derive` Phase 2 and `design-agent` Phase 2 — before authoring, check whether a catalog entry ≥ 0.75 similarity already covers the need; if so, propose a `references:` entry instead.
+
+3. **design-agent Phase 2 update.** Before emitting `FILL_BACK_REQUEST`, consults external-skills-catalog. If match found, emits `external_reference_candidate` on the recipe; recruit Phase 2.4 authors a thin internal wrapper whose frontmatter carries `references:` instead of a full implementation.
+
+### D. Performance amplification (§3.10)
+
+1. **`bin/kiho_telemetry_rollup.py` extended** with `--company-root` + `--performance-window-days` flags. Emits `$COMPANY_ROOT/company/skill-performance.jsonl` — one row per skill per 30-day window: `{skill_id, invocations, success_rate, median_duration_ms, user_correction_rate, last_invoked}`. Aggregates across every project's `skill-invocations.jsonl` found under env `$CLAUDE_PROJECTS` or standard default roots.
+
+2. **Skill ranking doc.** New `skills/core/hr/design-agent/references/skill-ranking.md` with the formula `score = w_s·success_rate + w_c·(1−correction_rate) + w_f·freshness` where `freshness = max(0, 1 − days_since_last/90)`, weights from `settings.performance.rank_weights` (must sum to 1.0).
+
+3. **design-agent Phase 2.3 update.** When multiple existing skills could cover a need, rank via the formula. Top → USE (in `skills[]`), middle → IMPROVE (flagged for next evolution cycle), bottom with `score < 0.4` AND no reverse dependents → DEPRECATE candidate for next `consolidate-skill-library` run. Cold-start rule (< 5 invocations → use `success_rate` alone).
+
+### E. Orchestrated unified search (§3.11)
+
+1. **`skills/core/search/unified-search/SKILL.md` NEW.** Single entry point for retrieval across project KB, company KB, skill library, external plugin skills. Inputs `{query, scope: [project|company|skills|external|all], filter?, limit?}`. Ranking blends embedding similarity with `perf_multiplier = 1 + 0.5·success_rate·freshness` (skills), `reuse_multiplier = 1 + min(0.3, reuse_count·0.05)` (KB), and additive `scope_bonus`. Fallback chain: sentence-transformers → sklearn+numpy TF-IDF → pure-Python stdlib TF-IDF.
+
+2. **CEO INITIALIZE step 7 enhancement.** When unified-search is available, CEO prefers it for the KB seed check — richer retrieval than `kb-search` alone. Falls back to `kb-search` when unified-search is missing/errors. Preserves the existing log semantics.
+
+### Migration
+
+- **v5 → v6 auto.** First v6 turn auto-migrates every v5 agent.md (step 4.5); settings.md auto-scaffolded from template (step 1); company/skills INDEX skeletons written if missing. No user action required.
+- **Enforce default.** `agent_md_lint.py` now enforces by default. Alpha sites that relied on warn-only pass `--warn-only` explicitly for one more release cycle; enforce becomes hard-mandatory in v6.1.
+- **`.v5bak` retention.** The migration script keeps `agent.md.v5bak` indefinitely (no auto-cleanup). A future utility will sweep backups older than 30 days.
+
+### Files
+
+- new `bin/brief_builder.py`
+- new `bin/migrate_v5_to_v6.py`
+- new `bin/embedding_util.py`
+- new `skills/_meta/consolidate-project-kb/SKILL.md`
+- new `skills/_meta/consolidate-company-kb/SKILL.md`
+- new `skills/_meta/consolidate-skill-library/SKILL.md`
+- new `skills/_meta/skill-discover/SKILL.md`
+- new `skills/core/search/unified-search/SKILL.md`
+- new `skills/core/hr/design-agent/references/skill-ranking.md`
+- new `references/skill-frontmatter-schema.md`
+- modified `bin/agent_md_lint.py` (enforce default)
+- modified `bin/kiho_telemetry_rollup.py` (+`performance_rollup`, +`collect_project_invocations`, `--company-root` flag)
+- modified `agents/kiho-ceo.md` (INITIALIZE step 1 rebuilt, step 4.5 inserted, DELEGATE constraints prefix, DONE step 10b inserted)
+- modified `skills/core/harness/kiho-setup/SKILL.md` (4 new scaffold ops)
+- modified `skills/core/planning/committee/SKILL.md` (language pre-check)
+- modified `skills/core/hr/design-agent/SKILL.md` (Step 2.3 performance ranking, Step 2 external reference check)
+- bumped `.claude-plugin/plugin.json` version to `6.0.0`
+
+### Version
+
+Plugin version bumped `5.22.0` → `6.0.0`. The jump is intentional: v6.0.0 is the first version in which auto-evolution behaviors ship — capability-gap recruitment, cross-turn consolidation, performance-driven ranking — making kiho recognizably a self-maintaining org rather than a disciplined runner of user-delegated work. The v5 schema remains readable via the v5bak backups and the migrator.
+
+---
+
+## v6.0.0-alpha.1 (PR #1 foundation — templates, config, lint scaffold)
+
+**Problem v6 solves.** After 14 `/kiho` waves on 33Ledger, 5 systemic gaps
+surfaced. Docs in `<project>/.kiho/plans/*.md` (v6 evolution plan):
+
+- Agents hardcode project names (`role: "33Ledger Mobile Lead"`) → not portable
+- `memory/` dirs empty after careful-hire → lessons never seed
+- Recruit waits for user on RACI fail → no gap-healing reflex
+- `$COMPANY_ROOT/company/wiki/**` 100% empty → research stays project-locked
+- No per-company settings file → can't set `official_language = zh-tw`
+
+PR #1 is **non-behavioral** scaffolding. PR #2 wires the universal gap-healing
+reflex (recruit v6). PR #3 wires auto-evolution (consolidation, propagation,
+external refs, search).
+
+### What shipped
+
+1. **`templates/company-settings.template.md`** — schema for `$COMPANY_ROOT/settings.md`.
+   Frontmatter: `official_language`, `tone.*`, `recruit.*` (4-candidate hard floor,
+   synthesis, memory-seed), `skill_library.*`, `kb_consolidation.*`, `startup.*`,
+   `promote.*`, `performance.*`, `external_skills.*`. Full doc at
+   `references/company-settings-schema.md`.
+
+2. **`templates/agent-md-v2.template.md`** — new v2 schema for
+   `$COMPANY_ROOT/agents/<id>/agent.md`. Mandatory fields: `schema_version: 2`,
+   `role_generic` (portable, no project names), `experience[]`, `current_state`,
+   `memory_path` (must be populated), `skills[]` (every ID must resolve),
+   `hire_provenance`. v5 soul §1-§12 body kept unchanged. Full doc at
+   `references/agent-schema-v2.md`.
+
+3. **`templates/project-registry.template.md`** — lint seed list. When
+   present at `$COMPANY_ROOT/project-registry.md`, the lint blocks project
+   strings from appearing in portable fields.
+
+4. **`templates/config.default.toml`** — added 8 new `[section]`s: `[recruit]`,
+   `[skill_library]`, `[kb_consolidation]`, `[startup]`, `[promote]`,
+   `[performance]`, `[performance.rank_weights]`, `[external_skills]`, `[tone]`.
+   All are fallbacks — `$COMPANY_ROOT/settings.md` overrides these key by key
+   at CEO INITIALIZE step 1 once PR #3 wires the read path.
+
+5. **`bin/agent_md_lint.py`** — warn-only validator (PR #1 default). 6 rules:
+   R1 schema_version, R2 required keys, R3 project-coupling detection against
+   registry, R4 skills resolve, R5 memory populated, R6 active_project in
+   experience. Switches to enforce mode (exit 1) in PR #3 via `--enforce`.
+
+### What does NOT ship in alpha.1
+
+- Recruit rewrite (Phases 1-6 with 4-candidate + synthesis + memory-seed) — PR #2
+- Universal gap-healing reflex wired into CEO INITIALIZE / LOOP — PR #2
+- `scope-promote-classifier` skill — PR #2
+- Auto-scaffold of `settings.md` on first turn — PR #3
+- Settings live-propagation (language → briefs / committee / narration) — PR #3
+- Consolidation cycles (project KB / company KB / skill library) — PR #3
+- External skill referencing + `skill-discover` — PR #3
+- Performance amplification + `unified-search` — PR #3
+- `bin/migrate_v5_to_v6.py` — PR #3 (auto-apply mode)
+
+### Migration notes for alpha testers
+
+v5.22 sites can install alpha.1 without breakage — nothing in PR #1 is wired
+into runtime yet. Running `python plugins/kiho/bin/agent_md_lint.py
+--warn-only $COMPANY_ROOT/agents/` on a v5 company root will surface the gaps
+(role coupling, missing memory, unresolvable skill IDs) as warnings so you
+can plan the migration before PR #3 auto-applies it.
+
+---
+
 ## v5.22 (runtime gates — invariants become enforced, not prescriptive)
 
 **Problem v5.22 solves.** A post-hoc audit of 6 `/kiho` sessions on a real project

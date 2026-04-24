@@ -1,5 +1,5 @@
 {
-  "description": "kiho v5.22 runtime gates. PreToolUse hooks that turn two long-standing invariants into enforced gates: (1) direct Writes to agent.md files must go through the recruit skill; (2) direct Writes/Edits to .kiho/kb/wiki/ must go through kiho-kb-manager. SessionStart hook reminds the CEO to declare a tier at the start of every /kiho turn. See plugins/kiho/bin/hooks/ for the hook runner scripts and CHANGELOG.md v5.22 for rationale.",
+  "description": "kiho v5.22 + v5.23 runtime gates. PreToolUse chain-aware hook reads references/approval-chains.toml to decide whether a Write or Edit is authorized by a declared approval chain; blocks if the chain's certificate_marker is missing. SessionStart hook reminds the CEO to declare a tier. v5.23 refactored the two v5.22-era scripts (pre_write_agent.py, pre_write_kb.py) into a single chain-aware gate (pre_write_chain_gate.py) per committee approval-chains-2026-04-23; the old scripts are kept as deprecation stubs and are not referenced from this manifest. See plugins/kiho/bin/hooks/ and plugins/kiho/CHANGELOG.md.",
   "hooks": {
     "SessionStart": [
       {
@@ -14,21 +14,11 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/bin/hooks/pre_write_agent.py",
-            "timeout": 5000
-          }
-        ]
-      },
-      {
         "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/bin/hooks/pre_write_kb.py",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/bin/hooks/pre_write_chain_gate.py",
             "timeout": 5000
           }
         ]

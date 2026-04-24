@@ -1,0 +1,191 @@
+# kiho approval chains — declarative registry (v5.23+)
+#
+# Decision: approval-chains-2026-04-23 (see _proposals/v5.23-oa-integration/02-committee-approval/decision.md)
+#
+# Each [[chain]] block declares a sequential multi-stage approval. Adding a
+# new chain should be ≤ 20 lines of TOML with ZERO Python edits — the hook
+# scripts read this file at runtime via `bin/approval_chain.py` and accept
+# any declared certificate_marker whose terminal_path_pattern matches the
+# file being written.
+#
+# Consumers:
+#   - bin/hooks/pre_write_agent.py  — reads certificate_marker + terminal_path_pattern
+#   - bin/hooks/pre_write_kb.py     — reads certificate_marker + terminal_path_pattern
+#   - bin/ceo_behavior_audit.py     — verifies `approval_stage_*` ledger entries
+#   - skill-internal pre-emit gates — each skill reads its chain's stages[]
+#                                     and checks prerequisites before emit
+#
+# Schema version follows semver; breaking changes require a CEO-committee vote.
+
+schema_version = "1.0"
+
+# ---------------------------------------------------------------------------
+# Chain: recruit-hiring
+# Governing skill: skills/core/hr/recruit/SKILL.md
+# Pre-existing v5.22 chain, re-expressed as declarative TOML. Behavior
+# preserved; adding this row does not change what the existing hooks block.
+# ---------------------------------------------------------------------------
+
+[[chain]]
+id = "recruit-hiring"
+certificate_marker = "RECRUIT_CERTIFICATE:"
+terminal_path_pattern = '.*[/\\](kiho[/\\]agents|agents)[/\\][^/\\]+[/\\]agent\.md$'
+description = "HR-lead convenes + auditors grade + CEO ratifies + user accepts before agent.md emission"
+governing_skill = "kiho:core/hr/recruit"
+
+  [[chain.stages]]
+  stage_id = "role-spec"
+  approver_role = "kiho-recruiter"
+  prerequisites = ["_meta-runtime/role-specs/<slug>/role-spec.md"]
+  on_deny = "abort"
+
+  [[chain.stages]]
+  stage_id = "interview-simulate"
+  approver_role = "kiho-recruiter"
+  prerequisites = ["_meta-runtime/interview-runs/<slug>/"]
+  on_deny = "abort"
+
+  [[chain.stages]]
+  stage_id = "hiring-committee"
+  approver_role = "kiho-hr-lead"
+  prerequisites = ["_meta-runtime/hiring-committees/<id>/decision.md"]
+  on_deny = "rejection-feedback"
+
+  [[chain.stages]]
+  stage_id = "ceo-ratify"
+  approver_role = "kiho-ceo"
+  prerequisites = []
+  on_deny = "abort"
+
+  [[chain.stages]]
+  stage_id = "user-accept"
+  approver_role = "user"
+  prerequisites = []
+  on_deny = "rejection-feedback"
+
+# ---------------------------------------------------------------------------
+# Chain: kb-writes
+# Governing agent: agents/kiho-kb-manager.md
+# Pre-existing v5.22 chain, re-expressed. The "chain" is effectively single-
+# stage (kb-manager is the sole gate), but it fits the schema and is audit-
+# able via the same mechanism.
+# ---------------------------------------------------------------------------
+
+[[chain]]
+id = "kb-writes"
+certificate_marker = "KB_MANAGER_CERTIFICATE:"
+terminal_path_pattern = '.*[/\\]\.kiho[/\\]kb[/\\]wiki[/\\].+\.md$'
+description = "kb-manager is the sole KB gateway; all KB wiki writes pass through kb-add/kb-update/kb-delete sub-skills"
+governing_skill = "kiho:kb/kb-add"
+
+  [[chain.stages]]
+  stage_id = "kb-manager-emit"
+  approver_role = "kiho-kb-manager"
+  prerequisites = ["matching kb_add / kb_update / kb_delete ledger entry"]
+  on_deny = "abort"
+
+# ---------------------------------------------------------------------------
+# Chain: okr-company
+# Governing skill: skills/core/okr/okr-set (v6.1+, committee 01)
+# NEW in v6.1. Company-level Objectives MUST be user-accepted before landing
+# as Tier-1 state. The skill invokes CEO escalation (AskUserQuestion); on
+# accept, CEO emits the file with USER_OKR_CERTIFICATE. No agent can set a
+# company O without the user being in the loop.
+# ---------------------------------------------------------------------------
+
+[[chain]]
+id = "okr-company"
+certificate_marker = "USER_OKR_CERTIFICATE:"
+terminal_path_pattern = '.*[/\\]\.kiho[/\\]state[/\\]okrs[/\\][^/\\]+[/\\]O-[^/\\]+-company-[^/\\]+\.md$'
+description = "Company-level OKR objectives require user acceptance via CEO AskUserQuestion escalation"
+governing_skill = "kiho:core/okr/okr-set"
+
+  [[chain.stages]]
+  stage_id = "draft"
+  approver_role = "kiho-ceo"
+  prerequisites = ["KR count 3-5", "weights sum <= 100"]
+  on_deny = "abort"
+
+  [[chain.stages]]
+  stage_id = "user-accept"
+  approver_role = "user"
+  prerequisites = []
+  on_deny = "abort"
+
+# ---------------------------------------------------------------------------
+# Chain: okr-department
+# Governing skill: skills/core/okr/okr-set (v6.1+, committee 01)
+# NEW in v6.1. Department-level Objectives require a closed committee
+# decision page as prerequisite. The certificate attests that the dept-lead
+# convened a committee, reached unanimous close, and emitted the O per the
+# decision's recommendation.
+# ---------------------------------------------------------------------------
+
+[[chain]]
+id = "okr-department"
+certificate_marker = "DEPT_COMMITTEE_OKR_CERTIFICATE:"
+terminal_path_pattern = '.*[/\\]\.kiho[/\\]state[/\\]okrs[/\\][^/\\]+[/\\]O-[^/\\]+-dept-[^/\\]+\.md$'
+description = "Department-level OKR objectives require a closed committee decision page"
+governing_skill = "kiho:core/okr/okr-set"
+
+  [[chain.stages]]
+  stage_id = "committee-close"
+  approver_role = "kiho-clerk"
+  prerequisites = ["decisions/<dept>-okr-<period>.md exists and closed unanimous"]
+  on_deny = "abort"
+
+  [[chain.stages]]
+  stage_id = "dept-lead-emit"
+  approver_role = "dept-lead"
+  prerequisites = []
+  on_deny = "abort"
+
+# ---------------------------------------------------------------------------
+# Chain: okr-individual
+# Governing skill: skills/core/okr/okr-set (v5.23+, committee 01)
+# Individual-level Objectives MUST carry a dept-lead approval before landing
+# as a Tier-1 OKR file. Mechanism extends the certificate pattern with a
+# distinct marker and file path.
+# ---------------------------------------------------------------------------
+
+[[chain]]
+id = "okr-individual"
+certificate_marker = "DEPT_LEAD_OKR_CERTIFICATE:"
+terminal_path_pattern = '.*[/\\]\.kiho[/\\]state[/\\]okrs[/\\][^/\\]+[/\\]O-[^/\\]+-individual-[^/\\]+\.md$'
+description = "Individual-level OKR objectives require dept-lead approval before Tier-1 emission"
+governing_skill = "kiho:core/okr/okr-set"
+
+  [[chain.stages]]
+  stage_id = "proposal-draft"
+  approver_role = "proposing-agent"
+  prerequisites = ["aligns_to field in frontmatter references an existing department O"]
+  on_deny = "abort"
+
+  [[chain.stages]]
+  stage_id = "dept-lead-review"
+  approver_role = "dept-lead"
+  prerequisites = []
+  on_deny = "rejection-feedback"
+
+# ---------------------------------------------------------------------------
+# Adding a new chain
+#
+# Minimum viable chain:
+#
+#   [[chain]]
+#   id = "<kebab-slug>"
+#   certificate_marker = "<SCREAMING_SNAKE_CASE>_CERTIFICATE:"
+#   terminal_path_pattern = '<python-regex-anchored-at-end>'
+#   description = "<one line>"
+#   governing_skill = "<namespaced-skill-id>"
+#
+#     [[chain.stages]]
+#     stage_id = "<stage-slug>"
+#     approver_role = "<agent-role-or-user>"
+#     prerequisites = []
+#     on_deny = "abort | rejection-feedback | reroute-to:<stage-id>"
+#
+# After adding: run `python bin/approval_chain.py --validate` to confirm
+# schema; run the replay harness (v5.22 shipped) with a scenario exercising
+# the new chain before pushing. No Python changes are required for chain
+# addition — the hooks and audit script are chain-agnostic.

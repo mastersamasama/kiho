@@ -43,7 +43,9 @@ target: continuity-md | both      # default both (writes CONTINUITY.md AND memor
 
    **next-priorities** — read `plan.md`'s Pending section, filter to items where `priority` is high OR the item has dependencies satisfied this turn. For each: `{item_id, title, recommended_starter_agent, blocking_factors_resolved}`.
 
-2. **Compute one-line digest.** "Turn <id>: <N> completed, <N> blocked, <N> on-fire, <N> next." This is the SessionStart hook's load-bearing pre-read.
+   **unread-announcements** (v5.23+) — scan `state/announcements/*.md` for entries where `pinned_until > now()` AND the frontmatter `ack_by` list does NOT contain every agent matched by `audience`. Per matching agent, collect `{announcement_id, subject, pinned_until, ack_required}`. These surface in the continuity output as a fifth section; agents pick them up on their next `memo-inbox-read` sweep.
+
+2. **Compute one-line digest.** "Turn <id>: <N> completed, <N> blocked, <N> on-fire, <N> next, <N> pinned announcements." This is the SessionStart hook's load-bearing pre-read. The announcement count is appended at the end (v5.23+ — hook readers that pre-date v5.23 gracefully ignore trailing fields).
 
 3. **Write the structured CONTINUITY.md.** Format:
    ```markdown
@@ -65,6 +67,10 @@ target: continuity-md | both      # default both (writes CONTINUITY.md AND memor
 
    ## Next priorities (recommended starters)
    - **<title>** (<item_id>) — start with: <agent>; ready because: <blocking_factors_resolved>
+   ...
+
+   ## Unread pinned announcements (v5.23+)
+   - **<announcement_id>** — <subject>; pinned until <pinned_until>; ack required: <yes|no>
    ...
 
    ## Cross-references
@@ -106,7 +112,7 @@ MEMORY_REF: mem://ceo-01/shift-handoffs#L<n>
 
 ## Invariants
 
-- **Four sections, fixed order.** completed / blocked / on-fire / next-priorities. Other sections degrade SessionStart hook's parsability.
+- **Five sections, fixed order.** completed / blocked / on-fire / next-priorities / unread-announcements. Other sections degrade SessionStart hook's parsability. The announcements section MAY be empty (no pinned entries in window); it MUST appear in the fixed order when present.
 - **One-line digest at the top.** SessionStart only loads the first ~265 chars; that line carries the load.
 - **No prose preamble.** No "Hello from the previous CEO turn"; the next CEO knows.
 - **Atomic write.** CONTINUITY.md is replaced wholesale, not appended. The previous turn's continuity is git history.

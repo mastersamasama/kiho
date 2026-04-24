@@ -185,10 +185,25 @@ Hooks are restricted to a closed verb set:
 | `memo-send` | `memo-send to=<X> severity=<Y> subject='<template-string>'` |
 | `incident-open` | `incident-open severity=<X> trigger_event='<template-string>'` |
 | `standup-log` | `standup-log agent_id=<X> did=<...>` |
+| `okr-checkin` (v6.2+) | `okr-checkin auto_from_cycle=true` — resolves the cycle's `aligns_to_okr` field from index.toml, derives KR score delta via `bin/okr_derive_score.py`, invokes `okr-checkin` atomic. No-op when `aligns_to_okr` is absent. Gated on `[okr] auto_checkin_from_cycle`. |
 
-Templates referencing other verbs in hooks fail validation. To add a hook verb, run a CEO-committee vote (rare).
+Templates referencing other verbs in hooks fail validation. To add a hook verb, run a CEO-committee vote (rare). The `okr-checkin` verb was added in v6.2 via user direct override of committee-01's no-auto-cadence decision (see `_proposals/v6.2-okr-auto-flow/`).
 
 Template strings inside hooks may interpolate `{cycle_id}`, `{template_id}`, `{index.<path>}`, `{params.<name>}`.
+
+### Cycle `aligns_to_okr` field (v6.2+)
+
+Any cycle template's `index_schema` MAY declare an optional `aligns_to_okr: "string"` field at the top level. When set on an individual cycle's index.toml, the `okr-checkin` hook auto-updates the referenced Objective's aligned KR(s) on cycle close.
+
+Resolution order for inheriting this value (cycle-open populates it automatically if empty):
+
+1. Explicit `--aligns-to-okr <o-id>` on cycle-runner op=open.
+2. Trigger plan.md task's frontmatter `aligns_to_okr: <o-id>`.
+3. Owner agent's active individual O for current period (from scanner cache).
+4. Owner agent's dept O for current period.
+5. If none resolved, leave empty and log `action: okr_link_unresolved, cycle_id: <id>` (not an error).
+
+This field is the single source of OKR→cycle linkage; `okr-checkin` reads only this field to know which KR(s) to update.
 
 ## Failure playbook
 

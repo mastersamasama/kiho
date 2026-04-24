@@ -206,6 +206,7 @@ After parsing, the verb dispatches to its handler:
 - `memo-send` → invoke `skills/core/communication/memo-send/`
 - `incident-open` → invoke `skills/core/ops/incident-open/`
 - `standup-log` → invoke `skills/core/ceremony/standup-log/`
+- `okr-checkin` (v6.2+) → invoke `skills/core/okr/okr-checkin/` with auto-derived score delta. Resolution: read the current cycle's `aligns_to_okr` field in `index.toml`; if present, read `handoffs.jsonl` for phase-owner success count + cycle outcome; pipe through `bin/okr_derive_score.py --cycle-id <id>` to compute conservative per-KR score increments; pass the derived deltas to `okr-checkin`. If `aligns_to_okr` is absent, the hook becomes a no-op with `action: okr_link_unresolved` logged. Gated on `[okr] auto_checkin_from_cycle = true` in config (default: true). Conservative formula avoids over-crediting (each cycle-close success increments aligned KR by `0.05 × weight/100`, capped at 1.0); readers interpret the score via `bin/okr_derive_score.py` docstring.
 
 Hook failures (non-zero exit, exception, timeout):
 1. Append to cycle-events.jsonl: `{action: "hook_failed", verb, kwargs, error}`

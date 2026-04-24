@@ -255,6 +255,65 @@ def check_recruit(entry: dict, project_root: Path, drifts: list[Drift]) -> None:
             )
 
 
+def check_okr_state(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
+    """Detect OKR state drift (v6.2+).
+
+    Two drift classes:
+      - okr_stale_o — active O with no checkin/close > [okr] stale_days
+      - okr_period_overrun — active O in a period that ended > 7 days ago
+                             without a period-close ledger entry in this turn
+
+    Lazy import of okr_scanner — audit stays runnable even without scanner.
+    Introduced by v6.2 OKR auto-flow.
+    """
+    try:
+        here = Path(__file__).resolve().parent
+        if str(here) not in sys.path:
+            sys.path.insert(0, str(here))
+        import okr_scanner  # type: ignore
+    except Exception:
+        return  # scanner unavailable; silent no-op
+
+    try:
+        actions = okr_scanner.scan(project_root)
+    except Exception:
+        return
+
+    # Collected period-close and cascade-close ledger entries in this audit window
+    closed_periods_in_window = {
+        (e.get("payload") or {}).get("period")
+        for e in entries
+        if e.get("action") in {"okr_period_auto_close_complete", "okr_period_auto_close"}
+    }
+
+    for action in actions:
+        if action.kind == "stale-memo":
+            drifts.append(
+                Drift(
+                    seq=None,
+                    severity="minor",
+                    check="okr_stale_o",
+                    declared=action.payload.get("o_id", ""),
+                    actual=f"{action.payload.get('days_since_checkin', '?')} days without checkin",
+                    hint="owner should okr-checkin, or CEO should memo owner",
+                )
+            )
+        elif action.kind == "period-close":
+            period = action.payload.get("period", "")
+            if period in closed_periods_in_window:
+                continue  # already handled in this turn
+            drifts.append(
+                Drift(
+                    seq=None,
+                    severity="major",
+                    check="okr_period_overrun",
+                    declared=action.payload.get("o_id", ""),
+                    actual=f"period {period} ended; no okr-close-period invocation in ledger",
+                    hint="OKR-master should be invoked with close-period for this period",
+                )
+            )
+
+
 def check_approval_chains(entries: list[dict], drifts: list[Drift]) -> None:
     """Verify approval_chain_closed:granted entries have all stages logged.
 
@@ -369,6 +428,9 @@ def main() -> int:
     # Second pass (v5.23+): approval-chain verification — needs the full
     # entry list so we can correlate chain_closed with prior stage_granted.
     check_approval_chains(collected, drifts)
+
+    # Third pass (v6.2+): OKR state drift — stale Os + period overruns.
+    check_okr_state(collected, project_root, drifts)
 
     summary = summarize(drifts)
 

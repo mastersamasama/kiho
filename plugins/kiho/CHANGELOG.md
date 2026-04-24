@@ -6,6 +6,68 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.2.0 (OKR auto-flow — user reversal of committee-01)
+
+Turns the v6.1 explicit-only OKR flow into a full-auto-with-user-acceptance-for-company-intent lifecycle. See `_proposals/v6.2-okr-auto-flow/00-reversal.md` for the user-direct-override record and `01-architecture.md` for the architectural reference.
+
+**Context.** Committee-01 of v5.23 decided "no auto-cadence" — OKRs only invoked explicitly by the user. That conflicted with kiho's full-auto-org philosophy: every other ceremony in kiho is agent-autonomous (retrospective, shift-handoff, memo-inbox-read, org-sync, etc.). On 2026-04-24 the user directly reversed the cadence decision while preserving the committee's other invariants (three-level structure, certificate markers, stretch cap, one-concept-per-file storage). Time-based cadence remains rejected (committee's "ceremony noise" concern was valid); event-driven auto-flow is now adopted.
+
+**Additional user requirement** layered on top: "HR called the agent work and agent base on its experience to work on and check by lead and HR and OKR master or even user." Implemented as: HR-lead dispatches candidate agents with an experience-using brief; agent drafts from its own memory (lessons/todos/observations) cited by ref; lightweight 1-round committee reviews (dept-lead + HR-lead + OKR-master + optional user).
+
+### Shipped
+
+1. **PR 1 — Skeleton** (`c3ed4eb`): new `kiho-okr-master` agent (parallel to kb-manager, sole OKR-tree coordinator, committee member not convener, certificate auditor not emitter). New `references/cycle-templates/okr-period.toml` 6-phase lifecycle template. New `skills/core/okr/okr-auto-sweep/` (sk-083) wrapping `bin/okr_scanner.py` deterministic scanner (10 unit tests). New CEO INITIALIZE step 17.5 (REQUIRED) that runs the scanner and routes per action kind. New `[okr]` config section with independent switches for each auto feature.
+
+2. **PR 2 — HR-dispatched individual-O drafting** (`3b1c085`): the load-bearing PR. New `skills/core/okr/okr-dept-cascade/` (sk-084) for OKR-master → dept-lead memo fanout. New `skills/core/okr/okr-individual-dispatch/` (sk-085) orchestrating the full flow: filter candidates (capability-matrix ≥ 3 + agent-score ≥ 0.70) → spawn with experience-using brief → collect drafts → convene lightweight 1-round review committee (3-4 members) → approve/revise/reject per committee outcome. Brief template at `references/agent-brief.md` requires 4 memory-query invocations before drafting; validator checks `rationale_from_lessons` array cites memory refs by regex-checkable path. Committee spec at `references/review-committee.md` with 4 user-seat triggers (new agent / no prior OKR / score < 0.70 / 5 KRs). `skills/core/hr/onboard/SKILL.md` step 8 added: schedule individual-O proposal at iteration `[okr.auto_set] onboard_threshold_iter` (default 30).
+
+3. **PR 3 — Cycle-close checkin + period-end cascade close** (`f58c1de`): new `skills/core/okr/okr-close-period/` (sk-086) batch + cascade close orchestrator walking the alignment tree leaf-first. New `bin/okr_derive_score.py` conservative score-delta deriver (formula: `0.05 × weight/100 × success_weight`, stretch ×0.5 multiplier, cap at 1.0; 9 unit tests). Cycle-runner `okr-checkin` hook verb registered in `orchestrator-protocol.md` — cycle close auto-updates aligned KRs via derive formula. `bin/ceo_behavior_audit.py` gains two new drift classes: `okr_stale_o` (MINOR: active O no-checkin > stale_days) and `okr_period_overrun` (MAJOR: period ended without close ledger entry).
+
+### Five event triggers (no time-based cadence)
+
+| Event | Action | Consumer |
+|---|---|---|
+| CEO INITIALIZE each turn | scanner emits action list | INITIALIZE step 17.5 |
+| Period boundary (first 30 days + no company O) | `propose-company` → user AskUserQuestion | OKR-master + CEO |
+| Company O set + missing dept Os | `cascade-dept` → memo dept-leads | OKR-master |
+| Dept O set + missing individual Os | `cascade-individual` → HR dispatch | HR-lead (load-bearing flow) |
+| Cycle close success + `aligns_to_okr` | `on_close_success` hook → `okr-checkin` | cycle-runner |
+| Period end | `period-close` → batch leaf-first | OKR-master via `okr-close-period` |
+| Parent O closed | `cascade-close` → defer/archive children | OKR-master |
+| Onboard agent reaches threshold | `okr-individual-dispatch` single-agent | HR-lead via onboard |
+
+### Invariants preserved from v6.1 committee-01
+
+- Three-level O structure (company / department / individual) — unchanged
+- Certificate markers: `USER_OKR_CERTIFICATE`, `DEPT_COMMITTEE_OKR_CERTIFICATE`, `DEPT_LEAD_OKR_CERTIFICATE` — unchanged
+- Stretch KR cap at 0.7 for aggregate — unchanged
+- One-file-per-O Tier-1 storage at `.kiho/state/okrs/<period>/` — unchanged
+- `okr-set` / `okr-checkin` / `okr-close` atomic primitives — unchanged
+- PreToolUse hook enforcement via `bin/hooks/pre_write_chain_gate.py` — unchanged
+- "Only CEO calls AskUserQuestion" invariant — unchanged (OKR-master prepares preview; CEO bubbles)
+- No time-based cadence — unchanged (v6.2 is event-driven, not time-driven)
+
+### Net scope
+
+- +4 new skills (sk-083 / 084 / 085 / 086), total now 86
+- +1 new agent (`kiho-okr-master`)
+- +2 new Python helpers (`okr_scanner.py`, `okr_derive_score.py`) + 2 new test files (19 new tests)
+- +1 new cycle template (`okr-period.toml`)
+- +1 new hook verb (`okr-checkin` in cycle-runner)
+- +2 new audit drift classes
+- +1 new `[okr]` config section with 8 independently-disableable switches
+- +2 proposal docs (`_proposals/v6.2-okr-auto-flow/00-reversal.md` + `01-architecture.md`)
+
+### Release posture
+
+- `plugin.json` 6.1.0 → 6.2.0
+- `marketplace.json` 6.1.0 → 6.2.0
+- 45 unit tests pass (26 v5.22/v5.23 + 10 okr_scanner + 9 okr_derive_score)
+- 5 approval chains validate (unchanged)
+- Zero regression on v6.1 OKR explicit-invocation flow (atomic primitives unchanged)
+- Backward-compat: setting `[okr] auto_trigger_enabled = false` in config reverts to v6.1 behavior
+
+---
+
 ## v6.1.0 (v5.23 OA-integration — all six committees landed)
 
 Committee-driven delta landed from `_proposals/v5.23-oa-integration/` (six committees closed unanimously at confidence ≥ 0.90 per `/kiho` planning turn 2026-04-23 and implementation turn 2026-04-24). Phase ordering followed `_proposals/v5.23-oa-integration/99-v5.23-roadmap.md`. **Five of six committees rejected adding new skill portfolios in favor of minimal extensions + small scripts on existing primitives** — only committee 01 OKR produces new skills (three). Net release scope: 3 new skills, 5 new Python helpers, 5 new data-storage-matrix rows, 5 approval chains (was 2), zero new agent roles, zero new PreToolUse hook scripts.

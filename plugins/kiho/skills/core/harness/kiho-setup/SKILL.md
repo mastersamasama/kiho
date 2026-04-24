@@ -85,6 +85,27 @@ entry_count: 0
 
 3. Return receipt.
 
+### op=scaffold-okr-master (v6.2.1+)
+
+Fixes v6.2 gap F: the plugin ships `agents/kiho-okr-master.md` but no step installed it into consuming projects' `$COMPANY_ROOT/agents/`, so `Agent(subagent_type="kiho:kiho-okr-master")` worked (resolved via plugin cache) but the agent never appeared in `org-registry.md` → HR-lead's committee-member resolution couldn't find it.
+
+1. Check `$COMPANY_ROOT/agents/kiho-okr-master/agent.md` existence.
+
+2. If missing:
+   - Ensure `$COMPANY_ROOT/agents/kiho-okr-master/` + `$COMPANY_ROOT/agents/kiho-okr-master/memory/` exist.
+   - Copy `${CLAUDE_PLUGIN_ROOT}/agents/kiho-okr-master.md` → `$COMPANY_ROOT/agents/kiho-okr-master/agent.md`. Rewrite the first line of YAML frontmatter to ensure it passes `agent_md_lint.py --enforce` (strip plugin-repo metadata if any).
+   - Seed non-empty memory files (mirror of recruit's memory-seed-on-hire pattern):
+     - `memory/lessons.md` with one initial lesson: `"Scanner-first discipline: every operation begins with a bin/okr_scanner.py run; acting on stale scans is drift."`
+     - `memory/todos.md` with: `"Read references/okr-guide.md; understand the three certificate markers and which party emits each."`
+     - `memory/observations.md` with: `"Installed at <iso> via kiho-setup op=scaffold-okr-master during v6.2.1+ bootstrap."`
+   - Append to `$COMPANY_ROOT/org-registry.md` if that file exists; otherwise the next `org-sync` run picks the agent up automatically (org-sync re-scans `$COMPANY_ROOT/agents/*/` each run).
+
+3. Log `action: scaffold_okr_master_installed` to `ceo-ledger.jsonl`. On skip-because-present, log `scaffold_okr_master_skipped`.
+
+4. Return receipt `{op: "scaffold-okr-master", status: "ok" | "already-present", agent_md_path: "<path>"}`.
+
+Also invoked as part of `op=full` at the end of step 2 (Scaffold the company tree).
+
 ## Procedure (op=full)
 
 ### 1. Resolve `company_root`

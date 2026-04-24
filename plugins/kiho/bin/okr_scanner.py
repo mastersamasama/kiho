@@ -11,11 +11,15 @@ enough payload for the CEO / OKR-master to dispatch.
 
 Action kinds emitted:
   - propose-company      : no active company O for current period + nudge window open
+                           (v6.2.1+: checks BOTH project-tier AND $COMPANY_ROOT/company/state/
+                           before emitting — company-O set in any project suppresses re-nudge)
   - cascade-dept         : active company O has no aligned dept O for some dept
   - cascade-individual   : active dept O has qualifying agents without individual Os
   - stale-memo           : active O with no checkin > stale_days
   - period-close         : today > period.end for period with any active O
   - cascade-close        : parent O closed; aligned children still active
+  - onboard-dispatch     : (v6.2.1+) ledger entry `okr_individual_schedule_onboard` reached
+                           `fires_at_ts` — time to dispatch HR individual-O for that agent
 
 Decision: v6.2 OKR auto-flow (reverses committee-01 no-auto-cadence rule
 per user direct override 2026-04-24). See
@@ -120,32 +124,148 @@ class OKR:
         return max(candidates) if candidates else None
 
 
-def _load_cfg(project_root: Path) -> dict:
-    """Merge DEFAULT_CFG with project-level and plugin-default config.toml [okr]."""
-    cfg = dict(DEFAULT_CFG)
+def _resolve_company_root() -> Path | None:
+    """Resolve $COMPANY_ROOT from env, plugin config.toml, or skill config.toml.
+
+    Precedence (v6.2.1):
+      1. Env var COMPANY_ROOT (explicit override)
+      2. ${CLAUDE_PLUGIN_ROOT}/skills/core/harness/kiho/config.toml [company] root
+      3. plugin-default templates/config.default.toml [company] root
+      4. None (company-tier reads silently skipped)
+    """
+    import os
+
+    env = os.environ.get("COMPANY_ROOT")
+    if env:
+        p = Path(env)
+        if p.exists():
+            return p
+
     if _toml is None:
-        return cfg
-    candidates = [
-        project_root / ".kiho" / "config.toml",
-        Path(__file__).resolve().parents[1] / "templates" / "config.default.toml",
-    ]
-    for path in candidates:
-        if not path.exists():
+        return None
+
+    here = Path(__file__).resolve().parents[1]
+    for candidate in (
+        here / "skills" / "core" / "harness" / "kiho" / "config.toml",
+        here / "templates" / "config.default.toml",
+    ):
+        if not candidate.exists():
             continue
         try:
-            with path.open("rb") as fh:
+            with candidate.open("rb") as fh:
                 raw = _toml.load(fh)
         except Exception:
             continue
-        block = raw.get("okr") or {}
-        # flatten one level: [okr.period], [okr.auto_set] etc. merge keys
-        for k, v in block.items():
-            if isinstance(v, dict):
-                for kk, vv in v.items():
-                    cfg.setdefault(kk, vv)
-            else:
-                cfg.setdefault(k, v)
+        company = raw.get("company") or {}
+        root = company.get("root")
+        if root:
+            p = Path(str(root))
+            if p.exists():
+                return p
+    return None
+
+
+def _load_cfg(project_root: Path) -> dict:
+    """Merge DEFAULT_CFG with plugin-default, $COMPANY_ROOT/settings.md, project config.toml.
+
+    Layered precedence (later wins):
+      1. DEFAULT_CFG hardcoded
+      2. ${CLAUDE_PLUGIN_ROOT}/templates/config.default.toml [okr]
+      3. $COMPANY_ROOT/settings.md [okr] (v6.2.1+ — gap G)
+      4. <project>/.kiho/config.toml [okr]
+
+    Settings.md uses TOML-in-markdown heuristic: we look for an `[okr]` header
+    line followed by key=value lines terminated by blank line or next `[` block.
+    Lightweight parser — company-wide OKR settings don't need full TOML escape
+    handling.
+    """
+    cfg = dict(DEFAULT_CFG)
+    if _toml is None:
+        return cfg
+
+    # Layer 2: plugin default
+    here = Path(__file__).resolve().parents[1]
+    plugin_default = here / "templates" / "config.default.toml"
+    if plugin_default.exists():
+        try:
+            with plugin_default.open("rb") as fh:
+                raw = _toml.load(fh)
+            _merge_okr_block(cfg, raw.get("okr") or {})
+        except Exception:
+            pass
+
+    # Layer 3: $COMPANY_ROOT/settings.md (TOML-in-markdown)
+    company_root = _resolve_company_root()
+    if company_root:
+        settings_md = company_root / "settings.md"
+        if settings_md.exists():
+            _merge_okr_from_settings_md(cfg, settings_md)
+
+    # Layer 4: project .kiho/config.toml
+    project_toml = project_root / ".kiho" / "config.toml"
+    if project_toml.exists():
+        try:
+            with project_toml.open("rb") as fh:
+                raw = _toml.load(fh)
+            _merge_okr_block(cfg, raw.get("okr") or {})
+        except Exception:
+            pass
+
     return cfg
+
+
+def _merge_okr_block(cfg: dict, block: dict) -> None:
+    """Merge an [okr] TOML block into cfg — later callers win via overwrite."""
+    for k, v in block.items():
+        if isinstance(v, dict):
+            for kk, vv in v.items():
+                cfg[kk] = vv  # later layer wins (overwrite)
+        else:
+            cfg[k] = v
+
+
+def _merge_okr_from_settings_md(cfg: dict, settings_md: Path) -> None:
+    """Extract [okr] block from TOML-in-markdown settings.md and merge into cfg.
+
+    Finds `[okr]` or `[okr.*]` headers inside markdown and parses key = value
+    lines until blank / next header. Quotes are stripped; booleans lower-case;
+    integers parsed. Anything unparseable is left as string.
+    """
+    try:
+        text = settings_md.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return
+    in_okr = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            in_okr = False
+            continue
+        if line.startswith("["):
+            in_okr = line == "[okr]" or line.startswith("[okr.")
+            continue
+        if not in_okr:
+            continue
+        m = re.match(r"^([a-z_][a-z0-9_]*)\s*=\s*(.+?)(?:\s*#.*)?$", line, re.IGNORECASE)
+        if not m:
+            continue
+        key, raw_val = m.group(1), m.group(2).strip()
+        if raw_val.startswith('"') and raw_val.endswith('"'):
+            cfg[key] = raw_val[1:-1]
+        elif raw_val.startswith("'") and raw_val.endswith("'"):
+            cfg[key] = raw_val[1:-1]
+        elif raw_val.lower() == "true":
+            cfg[key] = True
+        elif raw_val.lower() == "false":
+            cfg[key] = False
+        else:
+            try:
+                cfg[key] = int(raw_val)
+            except ValueError:
+                try:
+                    cfg[key] = float(raw_val)
+                except ValueError:
+                    cfg[key] = raw_val
 
 
 def _parse_period(period: str, today: date) -> tuple[date, date] | None:
@@ -200,23 +320,72 @@ def _load_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def load_okrs(project_root: Path) -> list[OKR]:
-    """Scan <project>/.kiho/state/okrs/<period>/*.md (excluding _closed/)."""
-    okrs_dir = project_root / ".kiho" / "state" / "okrs"
-    if not okrs_dir.exists():
-        return []
+    """Scan both project-tier and company-tier OKR directories.
+
+    v6.2.1+ (gap E): reads:
+      - <project>/.kiho/state/okrs/<period>/*.md
+      - $COMPANY_ROOT/company/state/okrs/<period>/*.md  (if company root resolved)
+
+    Excludes _closed/ subdirs in either tier. Company-tier Os are tagged with
+    `scope=company-tier` in their .path for downstream filtering; project-tier
+    files stay as project_root-relative.
+    """
+    dirs_to_scan: list[tuple[str, Path]] = [
+        ("project", project_root / ".kiho" / "state" / "okrs"),
+    ]
+    company_root = _resolve_company_root()
+    if company_root:
+        dirs_to_scan.append(("company", company_root / "company" / "state" / "okrs"))
+
     out: list[OKR] = []
-    for period_dir in sorted(okrs_dir.iterdir()):
-        if not period_dir.is_dir():
+    for _scope, okrs_dir in dirs_to_scan:
+        if not okrs_dir.exists():
             continue
-        for o_file in sorted(period_dir.glob("O-*.md")):
-            if "_closed" in o_file.parts:
+        for period_dir in sorted(okrs_dir.iterdir()):
+            if not period_dir.is_dir():
                 continue
-            try:
-                text = o_file.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            fm, body = _load_frontmatter(text)
-            out.append(OKR(path=o_file, frontmatter=fm, body=body))
+            for o_file in sorted(period_dir.glob("O-*.md")):
+                if "_closed" in o_file.parts:
+                    continue
+                try:
+                    text = o_file.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                fm, body = _load_frontmatter(text)
+                out.append(OKR(path=o_file, frontmatter=fm, body=body))
+    return out
+
+
+def parse_timestamp(raw: str) -> datetime | None:
+    """Parse ISO-8601 timestamp, coercing naive datetimes to UTC.
+
+    Returns None on unparseable input (not exception — scanner is best-effort).
+    """
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _load_ledger(project_root: Path) -> list[dict]:
+    """Load ceo-ledger.jsonl for scanner checks that need action history."""
+    ledger = project_root / ".kiho" / "state" / "ceo-ledger.jsonl"
+    if not ledger.exists():
+        return []
+    out: list[dict] = []
+    for line in ledger.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
     return out
 
 
@@ -340,7 +509,80 @@ def scan(project_root: Path, today: date | None = None) -> list[Action]:
                 reason=f"parent {parent} is closed",
             ))
 
+    # 7. onboard-dispatch (v6.2.1+, gap C) — ledger `okr_individual_schedule_onboard`
+    #    entries whose fires_at_ts has passed AND no matching dispatch/individual-O
+    #    emission since. Gated on [okr.auto_set] individual_on_onboard.
+    if cfg.get("individual_on_onboard", True):
+        ledger = _load_ledger(project_root)
+        pending = _collect_pending_onboard_dispatches(ledger, today_dt)
+        for sched in pending:
+            actions.append(Action(
+                kind="onboard-dispatch",
+                payload={
+                    "agent": sched["agent"],
+                    "scheduled_at": sched["scheduled_at"],
+                    "fires_at": sched["fires_at"],
+                    "days_since_scheduled": sched["days_since_scheduled"],
+                },
+                reason=(
+                    f"agent {sched['agent']} passed onboard threshold "
+                    f"({sched['days_since_scheduled']} days); dispatch HR individual-O"
+                ),
+            ))
+
     return actions
+
+
+def _collect_pending_onboard_dispatches(ledger: list[dict], today_dt: datetime) -> list[dict]:
+    """Return onboard schedules whose fires_at has passed + no matching dispatch yet.
+
+    Ledger shape (v6.2.1 onboard step 8):
+      {"action": "okr_individual_schedule_onboard",
+       "payload": {"agent": "<id>", "scheduled_at": "<iso>", "fires_at": "<iso>"}}
+
+    A schedule is considered "dispatched" when a subsequent entry has action
+    in {"okr_dispatch_spawn", "okr_individual_emitted",
+        "okr_individual_rejected", "okr_individual_schedule_cancelled"} with the
+    same agent id. A schedule is also cleared if a newer `okr_individual_schedule_onboard`
+    for the same agent supersedes it.
+    """
+    pending_by_agent: dict[str, dict] = {}
+    for entry in ledger:
+        action = entry.get("action", "")
+        payload = entry.get("payload") or {}
+        agent = str(payload.get("agent", ""))
+        if not agent:
+            continue
+        if action == "okr_individual_schedule_onboard":
+            fires_raw = payload.get("fires_at", "")
+            fires_at = parse_timestamp(fires_raw) if fires_raw else None
+            if fires_at is None:
+                continue
+            pending_by_agent[agent] = {
+                "agent": agent,
+                "scheduled_at": payload.get("scheduled_at", ""),
+                "fires_at": fires_raw,
+                "fires_dt": fires_at,
+            }
+        elif action in {
+            "okr_dispatch_spawn",
+            "okr_individual_emitted",
+            "okr_individual_rejected",
+            "okr_individual_schedule_cancelled",
+        }:
+            pending_by_agent.pop(agent, None)
+
+    out: list[dict] = []
+    for rec in pending_by_agent.values():
+        if rec["fires_dt"] <= today_dt:
+            days_since = (today_dt - rec["fires_dt"]).days
+            out.append({
+                "agent": rec["agent"],
+                "scheduled_at": rec["scheduled_at"],
+                "fires_at": rec["fires_at"],
+                "days_since_scheduled": days_since,
+            })
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:

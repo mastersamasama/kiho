@@ -13,7 +13,7 @@
       "name": "kiho",
       "source": "./plugins/kiho",
       "description": "Single-entry multi-agent orchestration harness for Claude Code. A Ralph-style CEO agent runs a per-turn autonomous loop over a project's plan.md, delegating to department leads, committees, and vendored skills; backed by a three-tier storage doctrine (Tier-1 markdown canonical, Tier-2 JSONL/YAML/TOML processing, Tier-3 on-demand sqlite/embeddings), a live org registry and capability matrix, a two-tier Karpathy-style knowledge base gated by a sole kb-manager agent, and a declarative cycle-runner kernel. v6.2 lands the OKR auto-flow: new kiho-okr-master agent, event-driven auto-triggers at period boundary + onboard threshold + cycle close + period end, HR-dispatched agent-experience-driven individual-O drafting (agent reads its own memory/lessons/todos before drafting, multi-party-reviewed by dept-lead + HR-lead + OKR-master + optional user), cycle-close auto-checkin via conservative score derivation, period-end batch + cascade close. User on path only for company-level OKR acceptance. v6.1 v5.23 OA-integration baseline preserved (approval chains, unified chain-aware hook, okr-set/checkin/close primitives, dashboard, agent cycle score, lightweight committees, memo broadcast, retrospective friction). v6.0 auto-evolution layer + v5.22 runtime gates preserved. Single user entry point: /kiho.",
-      "version": "6.2.0",
+      "version": "6.2.1",
       "author": {
         "name": "wky"
       },

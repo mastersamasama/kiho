@@ -67,11 +67,15 @@ For each `dept_o_scope[i]`:
 
 1. Read `<project>/.kiho/state/org-registry.md` → all agents in the dept.
 2. Read `<project>/.kiho/state/capability-matrix.md` → keep agents with proficiency ≥ `filter_min_capability_score` in any skill listed in the dept-O's `required_skills` or topic-tag-aligned to the dept-O.
-3. Read `<project>/.kiho/state/agent-score-<period>.jsonl` (v5.23 output) → keep agents with `score ≥ filter_min_agent_score` OR agents with no score yet (new hires).
-4. Exclude agents with an active individual O for this period already.
+3. **(v6.2.1+ gap I fix) Read agent-score with cross-project fallback**:
+   - First check `<project>/.kiho/state/agent-score-<period>.jsonl` (this-project score).
+   - If absent OR agent missing from this-project scores, ALSO check `$COMPANY_ROOT/company/state/agent-score-<period>.jsonl` (company-wide rollup — produced by `bin/kiho_telemetry_rollup.py --company-root` in DONE step 10). This covers kiho-* agents who span multiple projects but happen to have done most work elsewhere.
+   - If BOTH absent OR agent missing from both → treat as "no score yet" (new hire or company-wide telemetry not yet rolled up) and include in candidate pool with `score_basis: new_hire`.
+   - Keep agents with `score ≥ filter_min_agent_score` OR `score_basis == new_hire`. Reject agents with score < threshold who have a score from either tier (prevents "project A has no score for agent-X but company-wide score is 0.4" from sneaking them in).
+4. Exclude agents with an active individual O for this period already (check BOTH `<project>/.kiho/state/okrs/` and `$COMPANY_ROOT/company/state/okrs/` — v6.2.1 OKR files may live in either tier per the scanner's gap-E fix).
 5. Cap to `max_per_dept` (take the highest-scoring first; tie-break on capability-matrix sum).
 
-Log `okr_dispatch_filter_complete, dept_o: <id>, candidates: <list>, excluded: <list-with-reason>`.
+Log `okr_dispatch_filter_complete, dept_o: <id>, candidates: <list>, excluded: <list-with-reason>, score_source_per_candidate: {agent: "project|company|new_hire"}`.
 
 If `single_agent` was provided (onboard path), skip the filter and use that agent directly.
 

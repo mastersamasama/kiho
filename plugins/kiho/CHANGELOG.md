@@ -6,6 +6,44 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.2.1 (OKR auto-flow gap fixes — wire the narratives)
+
+Closes 10+ gaps identified in the post-v6.2.0 audit. v6.2.0 shipped narratives of auto-flow without fully wiring them; v6.2.1 converts every shipped claim into working code. Full report at `_proposals/v6.2.1-gap-fixes/00-gap-closure-report.md`.
+
+### Hard auto-trigger gaps (closed)
+
+- **Gap H**: `bin/cycle_runner.py:59` `HOOK_VERBS` frozenset now includes `"okr-checkin"`. CEO INTEGRATE step e extended with concrete hook handler — shells out to `bin/okr_derive_score.py`, then `Agent(subagent_type="kiho:kiho-okr-master")`. Cycle-close auto-checkin goes from decorative to functional.
+- **Gap D**: `committee/SKILL.md` §Clerk extraction new step 6 — OKR-topic unanimous committees emit `committee_requests_okr_set` ledger action with clerk-assembled payload + `DEPT_COMMITTEE_OKR_CERTIFICATE`. CEO INTEGRATE dispatches `okr-master`.
+- **Gap C**: `onboard/SKILL.md` step 8 rewritten. Dead-letter mentor-memory todo replaced with explicit `okr_individual_schedule_onboard` ledger entry carrying `fires_at` timestamp. Scanner pass-7 detects fired schedules and emits `onboard-dispatch` action.
+- **Gap J**: `kiho-plan/SKILL.md` §Procedure new step 5a — Jaccard token-overlap auto-link from plan items to active OKRs. Auto-tag at ≥0.30, suggest at 0.15–0.30.
+- **Gap A**: CEO step 17.5 rewritten with concrete `Agent(subagent_type=..., prompt=...)` and `AskUserQuestion({...})` invocation templates per action kind. Seven action kinds now have template dispatch.
+- **Gap B**: Architectural clarification — scanner-dispatch is primary + REQUIRED; `okr-period.toml` cycle template is optional alternative for cycle-tracked periods.
+
+### `$COMPANY_ROOT` compliance gaps (closed)
+
+- **Gap E**: `okr_scanner.load_okrs` reads BOTH project-tier AND `$COMPANY_ROOT/company/state/okrs/`. Company-tier OKR in any location suppresses cross-project `propose-company` re-nudges.
+- **Gap F**: `kiho-setup` new op `scaffold-okr-master` copies `kiho-okr-master.md` to `$COMPANY_ROOT/agents/` + seeds memory. CEO INITIALIZE step 1f auto-invokes.
+- **Gap G**: `okr_scanner._load_cfg` layers config: DEFAULT → plugin → `$COMPANY_ROOT/settings.md` `[okr]` (TOML-in-markdown) → project `config.toml`.
+- **Gap I**: `okr-individual-dispatch` stage 1 filter falls back to company-tier `agent-score-<period>.jsonl`; also checks both tiers for existing individual Os.
+
+### Audit gap (closed)
+
+- **Gap K**: `ceo_behavior_audit.py` two new MAJOR drift classes — `okr_hook_without_checkin` (cycle close with `aligns_to_okr` but no subsequent `okr_auto_checkin_from_cycle`) and `okr_committee_without_okr_set` (OKR-topic unanimous committee without `committee_requests_okr_set` / `okr_set` / `okr_set_request_skipped`). 8 new unit tests.
+
+### Net scope
+
+- 8 files modified + 1 new proposal doc + 0 deleted
+- Python: +1 hook verb, +~180 lines scanner (company-tier + settings-md + onboard-dispatch + parse_timestamp), +~80 lines audit (2 new drift classes)
+- Tests: +6 scanner tests, +8 audit tests → **59/59 passing** (was 45)
+- 5 approval chains validate (unchanged from v6.2.0)
+- Zero breaking changes; all changes additive or parameterized
+
+### Why this is a patch release (not minor)
+
+Every v6.2.1 change closes a gap in a v6.2.0 claim. No new user-facing capability shipped; the change set makes v6.2.0's advertised capability actually work. Backward-compat: `[okr] auto_trigger_enabled = false` still reverts to v6.1 explicit-only.
+
+---
+
 ## v6.2.0 (OKR auto-flow — user reversal of committee-01)
 
 Turns the v6.1 explicit-only OKR flow into a full-auto-with-user-acceptance-for-company-intent lifecycle. See `_proposals/v6.2-okr-auto-flow/00-reversal.md` for the user-direct-override record and `01-architecture.md` for the architectural reference.

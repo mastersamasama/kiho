@@ -86,14 +86,33 @@ first_90_day_brief: <bool>        # default true
 
 7. **Notify the dept lead.** `memo-send to=<dept-lead> severity=fyi` with the onboarding summary. The lead is `informed`, not action-required — the mentor is the action owner.
 
-8. **Schedule individual-OKR proposal (v6.2+).** If `[okr.auto_set] individual_on_onboard == true` in config (default: true), enqueue a deferred action that fires when this agent reaches `[okr.auto_set] onboard_threshold_iter` iterations (default: 30). Implementation: write a todo into the mentor's memory with kind=lesson-followup and body `"At iteration <N+threshold>, memo HR-lead to dispatch individual-O drafting for <agent_id>. See skills/core/okr/okr-individual-dispatch/SKILL.md."`. The mentor's next `memory-reflect` surfaces this as a trigger; HR-lead then invokes `okr-individual-dispatch single_agent=<agent_id>` which runs the single-agent variant of the dispatch flow. On dispatch, the new agent gets its first brief to draft an individual O based on the experience it's accumulated over those N iterations.
+8. **Schedule individual-OKR proposal (v6.2.1+ — gap C fix).** If `[okr.auto_set] individual_on_onboard == true` in config (default: true), emit a scheduled ledger entry that the OKR scanner's `onboard-dispatch` action detects at each future CEO INITIALIZE:
+
+   a. Compute `fires_at` from `[okr.auto_set] onboard_threshold_iter` (default: 30). Since kiho iterations ≈ agent active-days (one iter ≈ one work session), convert to wall-clock: `fires_at = now() + onboard_threshold_iter × 1 day`. This is a simplification that avoids tracking per-agent iteration counters; the scanner re-checks each turn so "30 days after onboard" is the effective semantics.
+
+   b. Append to `<project>/.kiho/state/ceo-ledger.jsonl`:
+      ```json
+      {"ts": "<iso-now>",
+       "action": "okr_individual_schedule_onboard",
+       "payload": {
+         "agent": "<agent_id>",
+         "scheduled_at": "<iso-now>",
+         "fires_at": "<iso-fires-at>",
+         "onboard_cycle_id": "<cycle-id or null>",
+         "dept_o_parent": "<current active dept-O id for agent's department, or null>"
+       }}
+      ```
+
+   c. The scanner's v6.2.1 pass-7 (`_collect_pending_onboard_dispatches`) detects entries where `fires_at <= today` AND no intervening `okr_dispatch_spawn` / `okr_individual_emitted` / `okr_individual_rejected` / `okr_individual_schedule_cancelled` for the same agent. On detect, scanner emits action kind `onboard-dispatch` with the agent id + days_since_scheduled. CEO INITIALIZE step 17.5 routes the action: memo `kiho-hr-lead` with `OPERATION: dispatch-individual, single_agent: <agent_id>, period: <current>`. HR-lead invokes `okr-individual-dispatch single_agent=<agent_id>` — the single-agent variant runs the normal experience-using brief flow.
 
    Skip this step if:
    - `[okr] auto_trigger_enabled == false` (master switch off)
    - `[okr.auto_set] individual_on_onboard == false` (feature disabled)
-   - The dept has no active dept-O for the current period (no parent to align to; OKR-master's cascade-dept sweep will fire on its own cadence)
+   - The agent's dept has no active dept-O for the current period (no parent to align to; OKR-master's cascade-dept sweep will fire on its own cadence, and this onboard-dispatch will wait harmlessly until a dept-O exists, since `okr-individual-dispatch` rejects absent-parent at its own stage 1)
 
-   Log `action: okr_individual_schedule_onboard, agent: <id>, fires_at_iteration: <N+threshold>`. This is a schedule, not a direct invocation — v6.2 runs the actual dispatch when the agent has memory to cite.
+   Log `action: okr_individual_schedule_onboard` (per above). On skip, log `action: okr_individual_schedule_skipped, reason: <which-guard>` so absent schedules are visible.
+
+   Cancelling a schedule: if an agent's onboard outcome changes (e.g., `agent-promote op=demote` right after onboard), emit `action: okr_individual_schedule_cancelled, agent: <id>` — the scanner will then stop surfacing `onboard-dispatch` for that agent.
 
 9. **Return refs.** Response shape below.
 

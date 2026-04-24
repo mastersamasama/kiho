@@ -38,6 +38,26 @@ Decompose a raw user request (especially a PRD) into a prioritized plan.md. Only
    - `estimated_complexity` — trivial | small | medium | large | epic
    - `dependencies` — list of item_ids that must complete first
 5. **Topological sort** by dependencies, then stable-sort by priority.
+
+5a. **OKR alignment tagging (v6.2.1+, gap J fix).** For each decomposed item, compute an `aligns_to_okr` tag using a conservative keyword match against active OKR files:
+
+   a. Shell out: `python ${CLAUDE_PLUGIN_ROOT}/bin/okr_scanner.py --project <project> --today <iso> --json` — the scanner's output already includes active Os (via the actions' context, or extend if needed). Alternative shortcut: Glob `<project>/.kiho/state/okrs/*/O-*.md` for active-status files + `$COMPANY_ROOT/company/state/okrs/*/O-*.md` if COMPANY_ROOT resolves (v6.2.1 scanner reads both tiers; gap E).
+
+   b. For each plan item, extract top-10 content tokens (title + first 2 lines of description, lowercased, stop-word-stripped).
+
+   c. For each active O (all levels — individual first, then dept, then company), extract top-20 tokens from the O's title + KR descriptions.
+
+   d. Score overlap via token set intersection / union ratio (Jaccard). Apply thresholds:
+      - Jaccard ≥ 0.30 → auto-tag `aligns_to_okr: <o_id>` in the plan item's frontmatter (high-confidence match).
+      - 0.15 ≤ Jaccard < 0.30 → emit as SUGGESTION only — store in the plan item's frontmatter as `aligns_to_okr_suggested: <o_id>, confidence: <score>`; user or CEO confirms before promoting to `aligns_to_okr`.
+      - Jaccard < 0.15 → no alignment; plan item has no OKR linkage (cycle-runner's cycle-open fallback chain resolves via other routes per `skills/_meta/cycle-runner/SKILL.md` §Cycle aligns_to_okr).
+
+   e. When a plan item matches multiple Os, prefer: individual-O of the task's RACI `R` owner → owner's dept-O → company-O. Tie-break on highest Jaccard score.
+
+   f. Log `action: plan_item_okr_linked, item_id: <id>, o_id: <matched>, confidence: <jaccard>` for each high-confidence match; `plan_item_okr_link_unresolved, item_id: <id>, reason: no_match` for no-match items. Skip the step silently if `[okr] auto_trigger_enabled == false`.
+
+   g. The cycle-runner later picks up the `aligns_to_okr` field via its cycle-open resolution chain (step 2 of the chain: "trigger plan.md task's frontmatter `aligns_to_okr`"). This makes the v6.2 cycle-close auto-checkin hook functional.
+
 6. **Write the decomposition** to `<project>/.kiho/state/plan.md` using the standard plan.md format. If merging with existing plan, preserve In progress / Blocked / Completed sections and add new items to Pending.
 7. **Return a receipt** listing item count, priority distribution, and any recruitment dependencies the CEO needs to schedule first.
 

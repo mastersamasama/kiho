@@ -255,6 +255,81 @@ def check_recruit(entry: dict, project_root: Path, drifts: list[Drift]) -> None:
             )
 
 
+def check_okr_hook_to_checkin(entries: list[dict], drifts: list[Drift]) -> None:
+    """v6.2.1+ (gap K). A cycle close with aligns_to_okr fired the okr-checkin
+    hook → there MUST be a matching `okr_auto_checkin_from_cycle` (or
+    `okr_checkin` manual) ledger entry within the same turn window. Missing
+    entry = hook was deferred to CEO but CEO never dispatched (gap H
+    symptom if it ever regresses).
+    """
+    by_cycle: dict[str, dict] = {}
+    for entry in entries:
+        action = entry.get("action", "")
+        payload = entry.get("payload") or {}
+        if action in {"cycle_close_success", "cycle_closed_success"}:
+            cycle_id = payload.get("cycle_id")
+            if cycle_id and payload.get("aligns_to_okr"):
+                by_cycle.setdefault(cycle_id, {"closed_with_okr": True, "checked_in": False,
+                                                "aligns_to_okr": payload["aligns_to_okr"]})
+        elif action in {"okr_auto_checkin_from_cycle", "okr_checkin"}:
+            cycle_id = payload.get("cycle_id")
+            if cycle_id and cycle_id in by_cycle:
+                by_cycle[cycle_id]["checked_in"] = True
+    for cycle_id, state in by_cycle.items():
+        if state["closed_with_okr"] and not state["checked_in"]:
+            drifts.append(
+                Drift(
+                    seq=None,
+                    severity="major",
+                    check="okr_hook_without_checkin",
+                    declared=f"cycle {cycle_id} aligns_to_okr={state['aligns_to_okr']}",
+                    actual="no okr_auto_checkin_from_cycle entry — hook fired but CEO did not dispatch",
+                    hint="verify cycle_runner HOOK_VERBS includes okr-checkin and CEO INTEGRATE step dispatches the verb",
+                )
+            )
+
+
+def check_committee_to_okr_set(entries: list[dict], drifts: list[Drift]) -> None:
+    """v6.2.1+ (gap K). Committee close with topic containing 'OKR' + unanimous
+    outcome MUST be followed (within ~20 entries) by either
+    `committee_requests_okr_set` (clerk emitted the request) and then
+    `okr_set` (CEO dispatched) — OR an explicit `okr_set_request_skipped`
+    ledger entry. Missing both = gap D symptom.
+    """
+    pending_committee_closes: list[dict] = []
+    for idx, entry in enumerate(entries):
+        action = entry.get("action", "")
+        payload = entry.get("payload") or {}
+        if action == "committee_closed":
+            topic = str(payload.get("topic", "")).lower()
+            outcome = str(payload.get("outcome", "")).lower()
+            if outcome == "unanimous" and any(k in topic for k in ("okr", "objective")):
+                pending_committee_closes.append({
+                    "seq": entry.get("seq") or idx,
+                    "committee_id": payload.get("committee_id", ""),
+                    "topic": topic,
+                    "resolved": False,
+                })
+        elif action in {"committee_requests_okr_set", "okr_set_request_skipped", "okr_set"}:
+            # Mark the most recent pending close as resolved (LIFO within window)
+            for p in reversed(pending_committee_closes):
+                if not p["resolved"]:
+                    p["resolved"] = True
+                    break
+    for p in pending_committee_closes:
+        if not p["resolved"]:
+            drifts.append(
+                Drift(
+                    seq=p["seq"],
+                    severity="major",
+                    check="okr_committee_without_okr_set",
+                    declared=f"committee {p['committee_id']} (topic: OKR) closed unanimous",
+                    actual="no committee_requests_okr_set OR okr_set OR okr_set_request_skipped in ledger",
+                    hint="committee SKILL.md §clerk step 6 (v6.2.1+) should emit the request — check it ran",
+                )
+            )
+
+
 def check_okr_state(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
     """Detect OKR state drift (v6.2+).
 
@@ -431,6 +506,11 @@ def main() -> int:
 
     # Third pass (v6.2+): OKR state drift — stale Os + period overruns.
     check_okr_state(collected, project_root, drifts)
+
+    # Fourth pass (v6.2.1+, gap K): cycle-close-with-okr-aligns-to had a
+    # matching checkin; and OKR-topic committee closes emitted okr-set request.
+    check_okr_hook_to_checkin(collected, drifts)
+    check_committee_to_okr_set(collected, drifts)
 
     summary = summarize(drifts)
 

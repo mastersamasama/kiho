@@ -65,6 +65,8 @@ Run this loop until done. One iteration = one item of work.
    1c. Read `$COMPANY_ROOT/company/wiki/index.md`. If missing: invoke `kiho-setup op=scaffold-company-index` inline; log `action: company_wiki_index_scaffolded`. Parse entry-count from frontmatter or row count; log `action: company_wiki_index_read, entries: <N>`. The body is loaded into working context at ≤500 tokens; deeper reads happen via `research` skill.
    1d. Read `$COMPANY_ROOT/skills/INDEX.md`. If missing: invoke `kiho-setup op=scaffold-skills-index` inline; log `action: company_skills_index_scaffolded`. Count the table rows; log `action: skill_library_size, count: <N>`. This is the cheap cross-project skill count used by design-agent for ranking and by consolidate-skill-library for cadence math.
    1e. Read `$COMPANY_ROOT/project-registry.md` (used by agent_md_lint R3 and the v6 migrator). If missing: invoke `kiho-setup op=scaffold-project-registry` inline. Log `action: project_registry_loaded, projects: <N>`.
+
+   1f. **Check OKR-master installation (v6.2.1+, gap F fix).** Test `$COMPANY_ROOT/agents/kiho-okr-master/agent.md` existence. If missing: invoke `kiho-setup op=scaffold-okr-master` inline (non-blocking). Skip silently if the agent already exists. Log `action: okr_master_installation_checked, status: <present|scaffolded>`. This ensures `Agent(subagent_type="kiho:kiho-okr-master")` calls later in step 17.5 and INTEGRATE step resolve to an agent that ALSO appears in `state/org-registry.md` (required so HR-lead can cite OKR-master in committee member lists per `okr-individual-dispatch/references/review-committee.md`).
    All four inline scaffolds are **non-blocking** — failure logs `action: scaffold_<which>_failed, error: <msg>` and the turn proceeds with plugin defaults. `startup.read_settings_on_init == false` in the merged config suppresses 1b–1e (debug-only opt-out).
 2. Read `<project>/.kiho/state/AGENT.md` — durable runtime learnings from prior sessions.
 3. Read `<project>/.kiho/state/plan.md` — outstanding work. If empty, populate it from the user request (see [PRD decomposition](#prd-decomposition)).
@@ -113,13 +115,67 @@ Run this loop until done. One iteration = one item of work.
 15. **Consume cross-agent learning queue.** Read `.kiho/state/cross-agent-learnings.jsonl`. For each unconsumed notification whose `target_agent` is about to be spawned this turn (based on planned RACI assignments from the plan.md items), include the `lesson_summary` in that target's delegation brief. If `tension: true`, also include: "Note: this lesson touches your value ranked #N. Consider whether to adopt or document the tension." Mark consumed after spawning.
 16. **Build skill-catalog Tier-3 index (v5.19+).** Invoke `python ${CLAUDE_PLUGIN_ROOT}/bin/skill_catalog_index.py build --plugin-root ${CLAUDE_PLUGIN_ROOT}` via Bash. This is the first shipping Tier-3 artifact (session-scope sqlite + FTS5 over `skills/**/SKILL.md` frontmatter; see `references/data-storage-matrix.md` §8 and `references/storage-architecture.md` §"Tier-3 guardrails"). On exit 0, record the db path `${CLAUDE_PLUGIN_ROOT}/.kiho/state/tier3/skill-catalog.sqlite` and make it available as `$SKILL_CATALOG_DB` for any downstream subagent that wants fast catalog queries (facet + FTS5) instead of re-parsing SKILL.md. On non-zero exit or unwritable tier3 directory, write an `action: skill_catalog_index_unavailable` entry to `ceo-ledger.jsonl` and continue — consumer scripts fall back to re-parse per T3-MUST-2 idempotent-safety. The index is evicted in DONE step 9 (session-scope).
 17. **Read skill + cycle health rollups (v5.20 Wave 1.3 + v5.21).** Read `${CLAUDE_PLUGIN_ROOT}/_meta-runtime/skill-health.jsonl` (produced by the previous turn's DONE step 10). For every row where `needs_evolve == true`, append the corresponding `skill_id` to this turn's evolve agenda — written into `plan.md` Pending as a low-priority maintenance item with `RACI: R=auditor | A=ceo-01 | C=eng-lead | I=ceo-01` and a brief recommending `/kiho evolve <skill_id>` follow-up. Also read `${CLAUDE_PLUGIN_ROOT}/_meta-runtime/critic-verdicts.jsonl` and pipe through `python bin/evolve_trigger_from_critic.py --threshold 0.80 --window 5 --min-runs 2`. Merge any agenda entries (dedupe by `skill_id`). Then read `${CLAUDE_PLUGIN_ROOT}/_meta-runtime/cycle-health.jsonl` (v5.21+, produced by DONE step 10 via the same `kiho_telemetry_rollup.py` invocation). For every `kind=template` row where `needs_attention == true`, add a `plan.md` item `Investigate template <template_id> (blocked=<n>, success_rate=<x>)` with `RACI: R=auditor | A=ceo-01 | C=eng-lead | I=ceo-01`. For every `kind=cycle` row where `current_status == blocked`, ensure the corresponding `Unblock <cycle_id>` item exists (added by step 18 if not already). If either rollup file does not yet exist (first turn after the wave ships), skip silently — no error, no agenda. Record `action: telemetry_rollup_loaded, flagged_skills: <n>, flagged_templates: <n>, blocked_cycles: <n>` in `ceo-ledger.jsonl`.
-17.5. **OKR auto-sweep (v6.2+, REQUIRED).** Invoke `python ${CLAUDE_PLUGIN_ROOT}/bin/okr_scanner.py --project <project> --json` via Bash, OR delegate to `kiho:kiho-okr-master` with `OPERATION: sweep, period: <current_period>`. The scanner is deterministic and read-only; it surveys `<project>/.kiho/state/okrs/` and emits a prioritized action list with six kinds: `period-close` (priority 1) / `cascade-close` (2) / `propose-company` (3) / `stale-memo` (4) / `cascade-dept` (5) / `cascade-individual` (6). For each action, route per the dispatch table:
-    - `propose-company` → CEO drafts 2-3 candidates from plan.md + last retrospective + dashboard, bubbles via `AskUserQuestion`; on accept invokes `okr-set level=company` with the user's `USER_OKR_CERTIFICATE:` body. Respect `[okr] nudge_cooldown_days_after_dismiss` (silent window after user dismisses).
-    - `cascade-dept` → Memo each missing dept-lead to convene an OKR committee (will run in its own /kiho turn; this INITIALIZE step only emits the memo).
-    - `cascade-individual` → Memo `kiho-hr-lead` to dispatch individual-O drafting per HR's filter (capability-matrix ≥ 3 + agent-score ≥ 0.70 in any dept-O-aligned skill). HR-lead owns the per-agent fan-out in its own subsequent invocation (v6.2 PR 2).
-    - `stale-memo` → Memo owner agent (severity=action) citing the age in days.
-    - `period-close` + `cascade-close` → Delegate to `kiho-okr-master` with the specific payload; master calls `okr-close` or applies cascade rule per `[okr] cascade_rule`.
-    Log `action: okr_sweep_complete, actions_count: <n>, kinds: [...]` in `ceo-ledger.jsonl`. Tolerate "no scanner output" (empty project, missing okrs/ dir) — log `okr_sweep_clean` and continue. The sweep is REQUIRED because silent-skip here reproduces the v5.22-era invariant drift (the audit would flag missing sweep entries). This step is the v6.2 load-bearing equivalent of the v5.22 step-7 kb-seed check.
+17.5. **OKR auto-sweep (v6.2+, REQUIRED; v6.2.1 concrete dispatch templates).** Invoke the scanner once via Bash:
+
+    ```bash
+    python ${CLAUDE_PLUGIN_ROOT}/bin/okr_scanner.py --project <project-root> --json
+    ```
+
+    The scanner is deterministic, read-only, and reads BOTH project-tier (`<project>/.kiho/state/okrs/`) AND company-tier (`$COMPANY_ROOT/company/state/okrs/`) as of v6.2.1 (gap E). Emits a prioritized action list with seven kinds: `period-close` (priority 1) / `cascade-close` (2) / `propose-company` (3) / `stale-memo` (4) / `cascade-dept` (5) / `cascade-individual` (6) / `onboard-dispatch` (7).
+
+    For each action in the scanner's output, execute the concrete dispatch template exactly — prose is NOT a substitute for invocation:
+
+    - **`propose-company`** → Read `<project>/.kiho/state/plan.md` + the most recent `.kiho/state/retros/<latest>.md` + `.kiho/state/dashboards/<current-period>.md` (if any). Draft 2-3 candidate Objectives + 3-5 KRs each. Check cooldown: grep ledger for `okr_propose_company_dismissed` within last `[okr] nudge_cooldown_days_after_dismiss` days; if present, skip and emit `okr_propose_deferred_by_cooldown`. Otherwise invoke:
+      ```
+      AskUserQuestion({question: "Set company Objectives for <period>?",
+                       header: "Company OKR", multiSelect: false,
+                       options: [{label: "Accept draft (Recommended)", description: "<draft summary>"},
+                                 {label: "Edit first", description: "walk through each O/KR"},
+                                 {label: "Dismiss (silence for 7 days)", description: "no company O this period"}]})
+      ```
+      On Accept: invoke `okr-set level=company period=<period> certificate: <USER_OKR_CERTIFICATE body with accepted_by=user, accepted_at=<iso>, conversation_turn=<turn-id>>`.
+
+    - **`cascade-dept`** → For each missing dept in the action payload, spawn:
+      ```
+      Agent(subagent_type="kiho:kiho-comms",
+            prompt="memo-send from=kiho-okr-master to=<dept-lead-id> severity=action subject='[OKR] Convene department OKR committee for <period> under <company_o_id>' body_md=<canonical body per okr-dept-cascade/SKILL.md §3>")
+      ```
+      Or delegate the full fanout at once:
+      ```
+      Agent(subagent_type="kiho:kiho-okr-master",
+            prompt="OPERATION: dispatch-dept, company_o_id=<id>, period=<period>")
+      ```
+      OKR-master runs `skills/core/okr/okr-dept-cascade/SKILL.md` flow internally.
+
+    - **`cascade-individual`** → Delegate to HR-lead with scope:
+      ```
+      Agent(subagent_type="kiho:kiho-hr-lead",
+            prompt="OPERATION: dispatch-individual, period=<period>, dept_o_scope=[<list>], max_per_dept=<cfg>")
+      ```
+      HR-lead runs `skills/core/okr/okr-individual-dispatch/SKILL.md` (the 5-stage flow).
+
+    - **`stale-memo`** → Spawn:
+      ```
+      Agent(subagent_type="kiho:kiho-comms",
+            prompt="memo-send from=kiho-okr-master to=<owner> severity=action subject='[OKR] <o_id> stale — last checkin <days> days ago' body_md='Please invoke okr-checkin or consider deferring this Objective.'")
+      ```
+
+    - **`period-close`** + **`cascade-close`** → Delegate:
+      ```
+      Agent(subagent_type="kiho:kiho-okr-master",
+            prompt="OPERATION: close-period, period=<period>, cascade_rule=<cfg>")
+      ```
+      Master runs `skills/core/okr/okr-close-period/SKILL.md`.
+
+    - **`onboard-dispatch`** (v6.2.1+) → From the scanner-emitted payload `{agent, scheduled_at, fires_at}`, delegate single-agent dispatch to HR-lead:
+      ```
+      Agent(subagent_type="kiho:kiho-hr-lead",
+            prompt="OPERATION: dispatch-individual, single_agent=<agent>, period=<current_period>")
+      ```
+
+    Log `action: okr_sweep_complete, actions_count: <n>, kinds: [...]` in `ceo-ledger.jsonl` after processing all actions. Tolerate "no scanner output" — log `okr_sweep_clean` and continue. The sweep is REQUIRED: silent-skip here reproduces the v5.22-era invariant drift (the audit flags missing sweep entries). This step is the v6.2 load-bearing equivalent of the v5.22 step-7 kb-seed check.
+
+    **Relationship to `okr-period.toml` cycle template (v6.2.1 gap B resolution).** The cycle template under `references/cycle-templates/okr-period.toml` is an OPTIONAL formal lifecycle for OKR periods — projects that prefer cycle-tracked period telemetry over scanner-dispatch may `cycle-runner op=open --template-id okr-period --params period=<period>` at the start of each period. The cycle template's phases internally call the same scanner + skills. **Scanner-dispatch (this step 17.5) is the primary path and the only REQUIRED path.** The cycle template is advisory; a project can ship v6.2.1 OKR auto-flow without ever opening an okr-period cycle.
 
 18. **Cycle snapshot (v5.21 Wave 5).** Read `<project>/.kiho/state/cycles/INDEX.md` (regenerated by previous turn's DONE step 11 via `bin/cycle_index_gen.py`). For each open cycle in the table:
     - Ensure plan.md has a corresponding item: `Advance cycle <cycle_id> (<template_id> @ phase <phase>)`
@@ -195,7 +251,7 @@ First check: **is this plan item a cycle item?** Cycle items have title prefix `
   Why: pre-v5.22, user corrections went only into the management journal or got lost. The same mistake could recur session-to-session. This path makes correction-driven learning durable without requiring the user to re-teach.
 
 **e. INTEGRATE (mid-loop KB update — never skip)**
-- **Process deferred cycle hooks (v5.21 Wave 5).** If this iteration's DELEGATE was a `cycle-runner advance` invocation **AND the response contains a non-empty `hooks_fired` array**, dispatch each hook. Defensive note: only terminal-transition responses (success / failure path that fires `on_close_success` / `on_close_failure`) include `hooks_fired`; the `delegate_to_skill` and `escalate_to_user` paths return BEFORE phase transition and omit the field entirely (per `skills/_meta/cycle-runner/references/orchestrator-protocol.md` §"Deferred invocation"). Therefore: `if "hooks_fired" not in response or not response["hooks_fired"]: skip this step`. Otherwise, for each hook with `deferred_to_ceo: true`, dispatch the actual underlying skill via the appropriate path: `memory-write` → spawn memory-write skill with parsed kwargs; `kb-add` → call kiho-kb-manager op=add; `memo-send` → spawn memo-send skill; `incident-open` → open a NEW incident-lifecycle cycle (do NOT recurse into the originating cycle); `standup-log` → spawn standup-log skill. Hook execution is best-effort; on failure, log `action: hook_dispatch_failed, hook_verb, error` to ceo-ledger.jsonl. The cycle-runner already wrote the hook intent to `cycle-events.jsonl`, so failure observability is preserved either way.
+- **Process deferred cycle hooks (v5.21 Wave 5, extended v6.2.1).** If this iteration's DELEGATE was a `cycle-runner advance` invocation **AND the response contains a non-empty `hooks_fired` array**, dispatch each hook. Defensive note: only terminal-transition responses (success / failure path that fires `on_close_success` / `on_close_failure`) include `hooks_fired`; the `delegate_to_skill` and `escalate_to_user` paths return BEFORE phase transition and omit the field entirely (per `skills/_meta/cycle-runner/references/orchestrator-protocol.md` §"Deferred invocation"). Therefore: `if "hooks_fired" not in response or not response["hooks_fired"]: skip this step`. Otherwise, for each hook with `deferred_to_ceo: true`, dispatch the actual underlying skill via the appropriate path: `memory-write` → spawn memory-write skill with parsed kwargs; `kb-add` → call kiho-kb-manager op=add; `memo-send` → spawn memo-send skill; `incident-open` → open a NEW incident-lifecycle cycle (do NOT recurse into the originating cycle); `standup-log` → spawn standup-log skill; `okr-checkin` (v6.2.1+) → resolve the cycle's `aligns_to_okr` field from its `index.toml`; if present, shell out to `python ${CLAUDE_PLUGIN_ROOT}/bin/okr_derive_score.py --project <project> --cycle-id <id> --o-id <aligns_to_okr>` to compute conservative KR score deltas; spawn `kiho:kiho-okr-master` with `OPERATION: checkin-from-cycle, cycle_id: <id>, o_id: <aligns_to_okr>, deltas: <derived>`. Master invokes the atomic `okr-checkin` primitive with the derived deltas. If `aligns_to_okr` is absent, emit `action: okr_link_unresolved, cycle_id: <id>` and treat as no-op (the scanner's next sweep may flag the cycle). Gated on `[okr] auto_checkin_from_cycle = true` (default). Hook execution is best-effort; on failure, log `action: hook_dispatch_failed, hook_verb, error` to ceo-ledger.jsonl. The cycle-runner already wrote the hook intent to `cycle-events.jsonl`, so failure observability is preserved either way.
 - If the iteration produced a decision with confidence ≥ 0.90, call `kiho-kb-manager` with op=`add` and the decision content. Kb-manager handles conflict/dedup/deprecation and updates indexes + `skill-solutions.md`.
 - If the iteration spawned a new skill (via `skill-improve`/`skill-derive`/`skill-capture`), the spawning skill has already called `kb-add` to register it. Verify by checking the return payload's `skills_spawned` field. If unregistered, call `kb-add` yourself for each.
 - If the iteration contradicted an existing KB entry, kb-manager will have opened a `questions/` page. Note the question ID in the ledger and add it to `plan.md` Pending if it blocks the current work.

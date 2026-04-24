@@ -121,7 +121,14 @@ When the committee closes (or escalates), the clerk agent runs the extraction pi
 3. Write `decision.md` using `templates/decision.template.md` (MADR format)
 4. Write `dissent.md` using `templates/dissent.template.md` if minority positions exist
 5. If `knowledge_update: true`, call `kb-add` with the decision content
-6. **Distribute reflections to participants (v5.20 Wave 2.1).** For each committee member, call `memory-write`:
+6. **OKR-topic auto-invocation (v6.2.1+, gap D fix).** If the committee's `topic` frontmatter field contains any of `OKR`, `okr`, `objective-key-result`, or `objective` as a whole word AND `outcome: unanimous` AND `knowledge_update: true` AND the `decision` field names a department O to set, the clerk emits a structured request to auto-invoke `okr-set level=department`:
+   - Clerk extracts the proposed O payload from the decision.md text (Objective statement + Key Results block; MADR's "Decision" and "Consequences" sections carry the fields).
+   - Clerk writes a `DEPT_COMMITTEE_OKR_CERTIFICATE:` block to a scratch buffer referencing `committee_id`, `decision_path`, `aligns_to: <company-o-id>` (inferred from the committee's charter/agenda `aligns_to_company_o` field if present), and `emitted_at: <iso>`.
+   - Clerk emits `action: committee_requests_okr_set` to `ceo-ledger.jsonl` with payload `{committee_id, level: "department", period, owner: <dept-lead>, aligns_to, kr: [...], certificate: <cert-body>}`. The CEO's next INTEGRATE step reads this action and dispatches `kiho:kiho-okr-master` with `OPERATION: emit-department-o` which in turn invokes `okr-set` with the clerk-assembled payload.
+   - Committees whose topic does NOT contain an OKR keyword skip this step. Committees with OKR topic but non-unanimous outcome skip (escalation path takes over).
+   - Guard: if config `[okr.auto_set] dept_from_committee == false`, skip silently (emit `okr_set_request_skipped, reason: config_disabled`).
+
+7. **Distribute reflections to participants (v5.20 Wave 2.1).** For each committee member, call `memory-write`:
    ```
    agent_id: <participant>
    type: reflection

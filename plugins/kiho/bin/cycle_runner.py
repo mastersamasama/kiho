@@ -56,7 +56,7 @@ CYCLE_EVENTS_JSONL = PLUGIN_ROOT / "_meta-runtime" / "cycle-events.jsonl"
 
 TERMINAL_PHASES = frozenset({"closed-success", "closed-failure", "blocked", "cancelled", "paused"})
 SENTINEL_ENTRY_SKILLS = frozenset({"__ceo_ask_user__", "__no_op__", "__hook_only__"})
-HOOK_VERBS = frozenset({"memory-write", "kb-add", "memo-send", "incident-open", "standup-log"})
+HOOK_VERBS = frozenset({"memory-write", "kb-add", "memo-send", "incident-open", "standup-log", "okr-checkin"})
 ALLOWED_DSL_NODES = (
     ast.Expression, ast.BoolOp, ast.UnaryOp, ast.Compare, ast.Constant,
     ast.Name, ast.Attribute, ast.Subscript, ast.Call,

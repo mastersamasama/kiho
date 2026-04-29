@@ -151,7 +151,23 @@ for iteration in 1..max_design_iterations:
           elif feature_coverage < 0.40: mark "conflict_narrow"  # existing too narrow
           else:                        mark "partial_reuse"     # candidate may want IMPROVE
         else:
-          mark "to_author"
+          # v6.0.1 Fix P1 — semantic pre-check BEFORE marking "to_author".
+          # Avoids authoring a new skill when an existing library entry with a
+          # different ID already covers the same semantic territory.
+          if Path($COMPANY_ROOT / "skills" / "unified-search" / "SKILL.md").exists():
+            neighbor = unified-search(
+              query: wanted.description,
+              scope: ["skills"],
+              limit: 3,
+              min_score: 0.70
+            )
+            if neighbor and neighbor[0].score >= 0.75:
+              mark "resolved_reuse" with suggested_skill_id = neighbor[0].skill_id
+              rewrite wanted.id_hint := neighbor[0].skill_id  # rename candidate ref
+              Log: action: skill_semantic_match_in_validate, original: <id_hint>,
+                   matched: <neighbor[0].skill_id>, score: <neighbor[0].score>.
+              continue
+          mark "to_author"   # no Path match AND no semantic neighbor → Phase 2.4
 
   2.4 FILL BACK — for each mark in {to_author, conflict_narrow, partial_reuse}:
 
@@ -161,6 +177,36 @@ for iteration in 1..max_design_iterations:
       ASK_USER via CEO to (a) split role, (b) raise cap, (c) narrow wanted list
 
     for each wanted_skill where mark in {to_author, conflict_narrow}:
+      2.4a-EXTERNAL  (v6.0.1 — Fix P2)
+            If settings.external_skills.allow_references == true AND
+               $COMPANY_ROOT/external-skills-catalog.json exists:
+              catalog = load($COMPANY_ROOT/external-skills-catalog.json)
+              for candidate in catalog.discovered_skills:
+                similarity = embedding_util.text_similarity(
+                                 wanted.description, candidate.description)
+                if similarity >= 0.75:
+                  record external_reference_candidate = {
+                    type: plugin_skill,
+                    plugin: candidate.plugin,
+                    skill_id: candidate.skill_id,
+                    similarity_score: similarity,
+                    purpose: wanted.rationale
+                  }
+                  Log: action: external_reference_candidate_matched,
+                       wanted_id: <id_hint>, matched: <plugin:skill_id>,
+                       similarity_score: <similarity>.
+                  SKIP kiho-researcher + skill-derive for this wanted_skill;
+                  in Phase 2.5 substitute by authoring a thin wrapper skill
+                  whose frontmatter carries
+                  `references: [{type: plugin_skill, plugin, skill_id}]`
+                  (per references/skill-frontmatter-schema.md §references:).
+                  break
+            Else (no external match OR catalog missing OR setting off):
+              proceed to 2.4a (kiho-researcher → skill-derive legacy path).
+
+            Mirrors design-agent Step 2.3 (lines 123-150) — the two paths now
+            have equivalent external-catalog behavior.
+
       2.4a  Invoke kiho-researcher with query built from wanted.description +
             wanted.feature_list (uses KB → trusted sources → web → deepwiki →
             clone → ask_user cascade). Budget: respect
@@ -266,13 +312,24 @@ near-duplicates.
     action = RESOLVED_REUSE
   elif existing and feature_coverage < 0.40:
     action = CONFLICT_NARROW     # existing skill too narrow → propose IMPROVE or AUTHOR_NEW
-  elif existing is None and semantic_neighbor_exists(wanted.description):
-    action = NAMING_CONFLICT     # similar-domain skill has different ID → dedupe names
+  elif existing is None:
+    # v6.0.1 Fix P3 — real unified-search call, no pseudocode.
+    # Uses `semantic_neighbor_exists(wanted.description)` helper whose concrete
+    # python-style implementation lives in references/skill-reconciliation.md
+    # §3.5.2 (calls unified_search scope=[skills], min_score=0.70).
+    neighbor = semantic_neighbor_exists(wanted.description)   # (skill_id, score) | None
+    if neighbor is not None:
+      action = NAMING_CONFLICT   # similar-domain skill has different ID → dedupe names
+    else:
+      action = AUTHOR_NEW
   else:
     action = AUTHOR_NEW
 
 3.5.3  DEDUPE proposals among candidates themselves:
-  for (wanted_A, wanted_B) where feature_overlap(A, B) >= 0.70
+  # v6.0.1 Fix P3 — `feature_overlap(A, B)` is the concrete helper from
+  # references/skill-reconciliation.md §3.5.3 that calls
+  # embedding_util.text_similarity over joined feature-list strings.
+  for (wanted_A, wanted_B) where feature_overlap(A.features, B.features) >= 0.70
                                AND A.candidate != B.candidate:
     merge into a single skill with features = A.features ∪ B.features
     both candidates' skills_wanted lists now reference the merged ID

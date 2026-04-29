@@ -189,9 +189,31 @@ Default fallback: `concepts`.
 
 ### Step 7 — Check for existing company-scope match
 
-Quick scan of `$COMPANY_ROOT/company/wiki/<category>/` for potential
-duplicates — title similarity ≥ 0.80 OR content similarity ≥ 0.70 via
-TF-IDF fallback (no embedding required).
+**v6.0.1 Fix P7 — prefer unified-search over TF-IDF.** When the
+unified-search skill is scaffolded in this company, use its embedding-based
+scoring as the primary duplicate check; fall back to the legacy TF-IDF
+heuristic when it is not.
+
+```
+If $COMPANY_ROOT/skills/unified-search/SKILL.md exists:
+  existing = unified-search(
+    query: file.title + " " + file.content_excerpt,
+    scope: ["company"],
+    limit: 5,
+    min_score: 0.80
+  )
+  if existing and existing[0].score >= 0.80:
+    set duplicate_candidate: existing[0].path
+    set duplicate_score: existing[0].score
+    set duplicate_source: "unified-search"
+Else (fallback — legacy behavior):
+  Quick scan of $COMPANY_ROOT/company/wiki/<category>/ for potential
+  duplicates — title similarity >= 0.80 OR content similarity >= 0.70 via
+  TF-IDF (no embedding required).
+  if match:
+    set duplicate_candidate: <path>
+    set duplicate_source: "tfidf"
+```
 
 If match → set `duplicate_candidate: <path>` in the output. The caller's
 `kb-add` will handle the decision tree (duplicate → keep existing / merge /

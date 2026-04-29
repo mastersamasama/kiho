@@ -53,14 +53,42 @@ if existing:
     elif coverage < 0.40: action = CONFLICT_NARROW     # existing too narrow
     else:                 action = PARTIAL_REUSE        # IMPROVE candidate
 else:
-    neighbor = find_semantic_neighbor(merged_wanted_features, INDEX.md)
-    if neighbor and jaccard(merged_wanted, neighbor.features) >= 0.60:
+    neighbor = semantic_neighbor_exists(merged_wanted_features_desc)
+    if neighbor is not None:
         action = NAMING_CONFLICT    # use neighbor.id or fold into it
     else:
         action = AUTHOR_NEW
 ```
 
-where `merged_wanted_features = ⋃ w.feature_list for each w in proposed[id_hint]`.
+where `merged_wanted_features = ⋃ w.feature_list for each w in proposed[id_hint]`
+and `merged_wanted_features_desc = " ".join(merged_wanted_features)`.
+
+**Concrete helper — `semantic_neighbor_exists` (v6.0.1 Fix P3).**
+Replaces the prior `find_semantic_neighbor` pseudocode with a real call
+into the unified-search skill:
+
+```python
+# Phase 3.5.2 — semantic neighbor detection
+def semantic_neighbor_exists(wanted_desc: str) -> tuple[str, float] | None:
+    """Returns (skill_id, score) if a semantic neighbor exists in library >= 0.70.
+
+    Guarded on `$COMPANY_ROOT/skills/unified-search/SKILL.md` existing —
+    on fresh installs or where unified-search is not yet scaffolded, returns
+    None and the caller falls through to AUTHOR_NEW (legacy behavior).
+    """
+    unified_search_path = Path(os.environ["COMPANY_ROOT"]) / "skills" / "unified-search" / "SKILL.md"
+    if not unified_search_path.exists():
+        return None
+    results = unified_search(
+        query=wanted_desc,
+        scope=["skills"],
+        limit=5,
+        min_score=0.70,
+    )
+    if results and results[0].score >= 0.70:
+        return (results[0].skill_id, results[0].score)
+    return None
+```
 
 ### 3.5.3 DEDUPE across candidates
 
@@ -71,9 +99,36 @@ for (i, j) in pairs(candidates):
     for w_a in candidates[i].skills_wanted:
         for w_b in candidates[j].skills_wanted:
             if w_a.id_hint != w_b.id_hint:
-                overlap = jaccard(w_a.feature_list, w_b.feature_list)
+                overlap = feature_overlap(w_a.feature_list, w_b.feature_list)
                 if overlap >= 0.70:
                     MERGE(w_a, w_b)
+```
+
+**Concrete helper — `feature_overlap` (v6.0.1 Fix P3).**
+Replaces the prior `jaccard(...)` pseudocode with embedding-based similarity
+so near-synonym feature strings ("touch target 44px", "tap target minimum
+size") merge correctly where literal Jaccard would fail:
+
+```python
+# Phase 3.5.3 — cross-candidate feature overlap
+def feature_overlap(a_features: list[str], b_features: list[str]) -> float:
+    """Returns similarity in [0,1] between two candidate skill feature lists.
+
+    Calls `bin/embedding_util.py text_similarity` under the hood — same
+    engine used by design-agent Step 2.3 external-catalog matching and by
+    consolidate-skill-library clustering. On import failure (no numpy /
+    no embedding model), falls back to literal Jaccard (legacy behavior).
+    """
+    a_text = " ".join(a_features)
+    b_text = " ".join(b_features)
+    try:
+        return embedding_util.text_similarity(a_text, b_text)
+    except ImportError:
+        # Fallback to Jaccard if embedding stack is unavailable
+        a_set, b_set = set(a_features), set(b_features)
+        if not a_set and not b_set:
+            return 0.0
+        return len(a_set & b_set) / len(a_set | b_set)
 ```
 
 `MERGE` operation:

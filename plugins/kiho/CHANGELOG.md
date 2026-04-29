@@ -6,6 +6,49 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.0.1 (skill-search wiring — post-v6.0.0 audit fixes — forward-ported patch)
+
+Closes 4 skill-search wiring gaps identified in the post-v6.0.0 audit (see plan §10.2b). v6.0.0 shipped the primitives (`skills/core/search/unified-search/`, `skills/_meta/skill-discover/`, `bin/embedding_util.py`, `external-skills-catalog.json`) but several decision points in recruit + CEO never actually invoked them. v6.0.1 wires every shipped primitive into the hot paths it was designed for, without adding any new skills, templates, or invariants.
+
+This patch is forward-ported onto the v6.2.x line (current plugin version bumped from 6.2.1 → 6.2.2). The `v6.0.1` label refers to the post-v6.0.0 audit scope; the actual release carries the semantic forward-port version.
+
+### Gaps closed
+
+- **[P2 HIGH — recruit 2.4 external catalog].** `skills/core/hr/recruit/SKILL.md` Phase 2.4 now runs a new `2.4a-EXTERNAL` step BEFORE invoking `kiho-researcher`. For each `to_author` / `conflict_narrow` skill, it consults `$COMPANY_ROOT/external-skills-catalog.json` via `embedding_util.text_similarity(wanted.description, candidate.description)`; matches with `similarity >= 0.75` record an `external_reference_candidate` and SKIP `kiho-researcher` + `skill-derive`, instead authoring a thin wrapper skill that references the external plugin skill. Mirrors design-agent Step 2.3 (lines 123-150 of `core/hr/design-agent/SKILL.md`) — the two reflex paths now have equivalent external-catalog behavior. Guarded by `settings.external_skills.allow_references` and catalog-file existence.
+
+- **[P3 HIGH — recruit 3.5 real helpers].** `skills/core/hr/recruit/references/skill-reconciliation.md` now contains concrete python-style `semantic_neighbor_exists()` and `feature_overlap()` helpers (real `unified_search(...)` calls and real `embedding_util.text_similarity(...)` calls) replacing the prior pseudocode placeholders. Phase 3.5.2 cross-candidate classify and 3.5.3 dedupe in the main `SKILL.md` now explicitly reference these helpers instead of pseudocode fig leaves. Jaccard remains as the import-failure fallback for `feature_overlap`.
+
+- **[P6 MEDIUM-HIGH — CEO LOOP step b/c unified-search].** `agents/kiho-ceo.md` pre-delegation skill-gap check no longer escalates straight to `kiho-hr-lead op=auto-recruit` on a missing `skill_id`. It first invokes `unified-search(query: <skill_description>, scope: ["skills", "external"], limit: 3, min_score: 0.75)`; top hits with `score >= 0.75` substitute into `required_skills` and the original recruit is skipped, emitting a new `action: skill_substitution_via_search` ledger entry. On no match (or when unified-search is not scaffolded), the legacy recruit-escalate path runs unchanged. Guarded by `unified-search/SKILL.md` existence so fresh installs still work.
+
+- **[P1 MEDIUM — recruit 2.3 semantic pre-check].** `skills/core/hr/recruit/SKILL.md` Phase 2.3 now runs a semantic pre-check in the `else (not Path.exists())` branch: invokes `unified-search` with `scope: ["skills"], min_score: 0.70`; if the top hit scores `>= 0.75`, renames `wanted.id_hint` to the matched ID and marks `resolved_reuse` with a `skill_semantic_match_in_validate` ledger entry. Falls through to `mark "to_author"` (legacy) on no match. Guarded by `unified-search/SKILL.md` existence.
+
+- **[P7 LOW-MEDIUM (shipped) — scope-promote-classifier duplicate check].** `skills/kb/scope-promote-classifier/SKILL.md` Step 7 now prefers `unified-search(scope: ["company"], min_score: 0.80)` for its duplicate detection. The legacy TF-IDF heuristic remains as the fallback when `unified-search/SKILL.md` is absent. The output adds a `duplicate_source: "unified-search" | "tfidf"` field so downstream `kb-add` can weigh the signal appropriately.
+
+### Invariants preserved
+
+- PreToolUse hooks unchanged.
+- CEO INITIALIZE required steps unchanged.
+- CEO DONE step order unchanged.
+- Recruit Phase 1-6 structure unchanged; only Phase 2.3, 2.4, and 3.5 received surgical insertions (new `2.4a-EXTERNAL` pre-step; new semantic-neighbor branch in 2.3; concrete helpers in 3.5.2/3.5.3). Existing 2.4a/b/c/d/e step labels are intact; 2.4a-EXTERNAL is an ADDITIONAL pre-step.
+- Every unified-search invocation is guarded with `$COMPANY_ROOT/skills/unified-search/SKILL.md` existence so the patch is backward-compatible on installs where unified-search has not yet been scaffolded.
+- No version bump beyond patch; no new skills; no new templates.
+
+### Verification (per plan §10.2b)
+
+1. Start a fresh `/kiho` turn on a project whose required capabilities partially overlap with an already-discovered external plugin skill (e.g. 33Ledger needs "agent-browser" and `onchainos:okx-dex-token` is in the catalog). Trigger auto-recruit; expect ledger entry `action: external_reference_candidate_matched, similarity_score: 0.xx`. Hired agent's skill list should include the authored thin wrapper (not a from-scratch re-implementation).
+2. CEO delegates mid-wave to a role where `sk-X` is missing but `sk-Y` covers it semantically. Expect `action: skill_substitution_via_search, original, matched, score` — no new recruit fired.
+3. Cross-candidate recruit with 4 candidates proposing nearly-duplicate skills should emit `action: candidates_deduplicated` with the merged `skill_id` — not 4 different authored skills.
+
+### Net scope
+
+- 4 files modified (3 for required fixes + 1 optional Tier 3): `skills/core/hr/recruit/SKILL.md`, `skills/core/hr/recruit/references/skill-reconciliation.md`, `agents/kiho-ceo.md`, `skills/kb/scope-promote-classifier/SKILL.md`
+- 1 file modified for version + narration: `CHANGELOG.md` + `.claude-plugin/plugin.json`
+- Python: 0 changes (pure markdown patch)
+- Tests: 0 new (wiring surface — exercised via the verification flow above)
+- Zero breaking changes; every new call site is guarded by existence checks or setting flags.
+
+---
+
 ## v6.2.1 (OKR auto-flow gap fixes — wire the narratives)
 
 Closes 10+ gaps identified in the post-v6.2.0 audit. v6.2.0 shipped narratives of auto-flow without fully wiring them; v6.2.1 converts every shipped claim into working code. Full report at `_proposals/v6.2.1-gap-fixes/00-gap-closure-report.md`.

@@ -213,10 +213,18 @@ Run this loop until done. One iteration = one item of work.
 - **Pre-delegation skill-gap check (v6).** Before firing the `Agent` tool for delegation:
   - Enumerate `required_skills` from the brief.
   - For each `skill_id` in `required_skills`:
-    - If `$COMPANY_ROOT/skills/<skill_id>/SKILL.md` does not exist AND `settings.recruit.skill_research_before_design == true`:
-      - Do NOT delegate yet — route to `kiho-hr-lead` op=auto-recruit to FILL THE SKILL first (recruit Phase 2 authors the skill, Phase 3 designs candidates, Phases 4-6 interview + hire).
-      - Log: `action: capability_gap_detected, trigger: mid_wave, missing_skills: [...]`.
-      - On recruit completion, return to this plan item and delegate with the now-resolved skill plus the newly-hired agent as R if applicable.
+    - If `$COMPANY_ROOT/skills/<skill_id>/SKILL.md` exists: mark `resolved`; continue.
+    - **Else (v6.0.1 Fix P6 — unified-search fallback before escalate-to-recruit):**
+      - If `$COMPANY_ROOT/skills/unified-search/SKILL.md` exists:
+        - Invoke `unified-search` with `{query: <skill_description_from_brief>, scope: ["skills", "external"], limit: 3, min_score: 0.75}`.
+        - If the top hit scores `>= 0.75`:
+          - Substitute `top_hit.skill_id` into `required_skills` in place of the missing `skill_id` (log original + matched + score).
+          - Log: `action: skill_substitution_via_search, original: <skill_id>, matched: <top_hit.skill_id>, score: <top_hit.score>`.
+          - Continue to next required skill (no recruit fired).
+      - (No high-confidence match OR unified-search not scaffolded.) If `settings.recruit.skill_research_before_design == true`:
+        - Do NOT delegate yet — route to `kiho-hr-lead` op=auto-recruit to FILL THE SKILL first (recruit Phase 2 authors the skill, Phase 3 designs candidates, Phases 4-6 interview + hire).
+        - Log: `action: capability_gap_detected, trigger: mid_wave, missing_skills: [...]`.
+        - On recruit completion, return to this plan item and delegate with the now-resolved skill plus the newly-hired agent as R if applicable.
 
 **c. DELEGATE**
 

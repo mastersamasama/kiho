@@ -6,6 +6,56 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.3.0 (CEO discipline enforcement — auto-KB integrate + ralph anti-stop)
+
+Closes two long-running drift modes observed in real-world `/kiho` sessions: (1) the CEO routinely skipped mid-loop KB integration despite the LOOP step e text saying "never skip"; (2) the CEO routinely exited DONE while `plan.md` Pending still had items, claiming "next /kiho turn will continue". Both were textual rules without runtime enforcement; v6.3.0 adds the enforcement layer.
+
+User signal that triggered this release: 33Ledger session 2026-04-22..2026-04-29 ran 195 ledger seqs across multiple turns with **0 `kb_add` invocations vs ~54 decisions ≥0.90 confidence**. The user explicitly demanded auto-KB triggers + ralph anti-stop be baked into the plugin, not left as discipline-by-prose. Lessons authored at session end as `L-KB-MID-LOOP-MANDATORY` and `L-RALPH-PENDING-NONEMPTY` are now codified as audit checks.
+
+### Changes
+
+- **`agents/kiho-ceo.md`** — three text strengthenings:
+  - **LOOP step e (INTEGRATE)** the "confidence ≥0.90 → kb_add" rule is now `[REQUIRED v6.3]` with explicit alternative path `action: kb_deferred, reason: <why>` ledger entry; silent skip is unacceptable. New text: "every kb_add MUST atomically update wiki/index.md (catalog row) + wiki/log.md (chronological entry); kiho-kb-manager v6.3+ enforces this internally" — Karpathy compliance per L-KARPATHY-NAV-FILES.
+  - **LOOP step g (CHECK COMPLETION)** explicit `[REQUIRED v6.3]` rule "MUST NOT exit DONE while plan.md Pending non-empty" with 4 enumerated legitimate exits: AskUserQuestion / max_iterations / budget_exceeded / all_pending_blocked. "Anything else is drift."
+  - **Invariants section** two new load-bearing MUSTs: `[v6.3] Auto-KB integrate per iteration` and `[v6.3] Ralph anti-stop`. Both reference the audit script enforcement.
+
+- **`bin/ceo_behavior_audit.py`** — two new check functions:
+  - `check_kb_integrate_discipline(entries, drifts)` — finds every `subagent_return` with confidence ≥0.90 and status ok/complete; verifies subsequent `kb_add` / `kb_deferred` / `kb_add_batch` entry within the same turn (between this entry and the next `tier_declared`/`initialize`/`done` boundary). Missing match = MAJOR drift `kb_integrate_skipped`.
+  - `check_ralph_anti_stop(entries, project_root, drifts)` — for each `action: done` entry, walks back to turn start (last `tier_declared`/`initialize`), verifies presence of legitimate escalation entry (`ask_user`, `max_iterations_hit`, `checkpoint_via_route_d`, `budget_exceeded`, `all_pending_blocked`); else, naive scan of plan.md Pending section — if non-empty AND no escalation = MAJOR drift `ralph_stopped_early`.
+  - Both wired into `main()` as a new "fifth pass" alongside existing OKR / approval-chain checks. Backward-compatible: pre-v6.3 ledger entries still flow through the new checks but are typically caught by `ledger_epoch: v5.22_active` amnesty unless `--full` is passed.
+
+### Smoke verification
+
+Run on a project ledger that has documented drift (e.g., 33Ledger session 2026-04-29):
+
+```bash
+python ${CLAUDE_PLUGIN_ROOT}/bin/ceo_behavior_audit.py --ledger <project>/.kiho/state/ceo-ledger.jsonl --json
+```
+
+Expected output: status `major` with `kb_integrate_skipped` + `ralph_stopped_early` drift entries surfaced. Baseline OKR / delegate / approval-chain checks unchanged.
+
+### Net scope
+
+- 2 files modified (`agents/kiho-ceo.md` + `bin/ceo_behavior_audit.py`)
+- 1 file modified for version + narration (this CHANGELOG + plugin.json)
+- 0 new skills / templates / hooks
+- ~120 lines of Python added (2 audit check functions)
+- ~20 lines of Markdown added (kiho-ceo.md text strengthening)
+- Backward-compatible: rules apply forward; pre-v6.3 ledger amnesty preserved
+- No breaking changes; existing `action` schemas unchanged
+
+### Companion lessons (project-tier KB, not plugin-shipped)
+
+These lessons should be authored in any project KB that shipped pre-v6.3 sessions:
+- `L-KB-MID-LOOP-MANDATORY` — every confidence ≥0.90 decision → immediate kb_add or explicit kb_deferred
+- `L-RALPH-PENDING-NONEMPTY` — Ralph LOOP must not exit DONE while Pending non-empty without escalation
+- `L-KIHO-SPEC-ROUTING` — feature/bugfix/refactor MUST route through kiho-spec; bypass requires explicit kiho_spec_bypass_taken ledger
+- `L-KARPATHY-NAV-FILES` — every project KB MUST maintain `wiki/index.md` + `wiki/log.md` per Karpathy LLM Wiki pattern
+
+The kiho-kb-manager skill should be enhanced in v6.3.x patch releases to auto-author these on every `kb-init`.
+
+---
+
 ## v6.0.1 (skill-search wiring — post-v6.0.0 audit fixes — forward-ported patch)
 
 Closes 4 skill-search wiring gaps identified in the post-v6.0.0 audit (see plan §10.2b). v6.0.0 shipped the primitives (`skills/core/search/unified-search/`, `skills/_meta/skill-discover/`, `bin/embedding_util.py`, `external-skills-catalog.json`) but several decision points in recruit + CEO never actually invoked them. v6.0.1 wires every shipped primitive into the hot paths it was designed for, without adding any new skills, templates, or invariants.

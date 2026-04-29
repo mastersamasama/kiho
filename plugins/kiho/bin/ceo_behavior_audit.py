@@ -441,6 +441,140 @@ def check_approval_chains(entries: list[dict], drifts: list[Drift]) -> None:
             )
 
 
+def check_kb_integrate_discipline(entries: list[dict], drifts: list[Drift]) -> None:
+    """[v6.3 — L-KB-MID-LOOP-MANDATORY enforcement]
+
+    Every iteration's confidence ≥0.90 decision MUST trigger immediate
+    `kb_add` OR explicit `kb_deferred` ledger entry. Silent skip is drift.
+
+    Audit logic:
+      - Find every `subagent_return` entry with payload.confidence >= 0.90
+        AND payload.status in {ok, complete}
+      - For each, verify a subsequent `kb_add` OR `kb_deferred` entry exists
+        within the same turn (between this entry and the next `done`/`tier_declared`)
+      - Missing match = MAJOR drift `kb_integrate_skipped`
+    """
+    high_conf_returns = []
+    turn_boundaries = [0]  # seqs where new turn started
+    for i, e in enumerate(entries):
+        action = e.get("action") or ""
+        if action in ("tier_declared", "initialize", "done"):
+            turn_boundaries.append(i)
+        if action == "subagent_return":
+            payload = e.get("payload") or {}
+            conf = payload.get("confidence")
+            status = payload.get("status") or ""
+            if conf is not None and conf >= 0.90 and status in ("ok", "complete"):
+                high_conf_returns.append((i, e))
+
+    for idx, return_entry in high_conf_returns:
+        # Find the next turn boundary AFTER this return
+        next_boundary = next(
+            (b for b in turn_boundaries if b > idx), len(entries)
+        )
+        # Look for kb_add or kb_deferred between idx+1 and next_boundary
+        window = entries[idx + 1 : next_boundary]
+        has_kb = any(
+            (e.get("action") or "") in ("kb_add", "kb_deferred", "kb_add_batch")
+            for e in window
+        )
+        if not has_kb:
+            drifts.append(
+                Drift(
+                    return_entry.get("seq"),
+                    "major",
+                    "kb_integrate_skipped",
+                    return_entry.get("target") or "<unknown>",
+                    f"high-confidence return ({return_entry.get('payload', {}).get('confidence')}) without subsequent kb_add or kb_deferred entry",
+                    "v6.3 L-KB-MID-LOOP-MANDATORY: every confidence ≥0.90 decision MUST trigger kb_add (immediate) or kb_deferred (explicit defer with reason)",
+                )
+            )
+
+
+def check_ralph_anti_stop(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
+    """[v6.3 — L-RALPH-PENDING-NONEMPTY enforcement]
+
+    The Ralph LOOP MUST NOT exit DONE while plan.md Pending list is non-empty,
+    UNLESS one of:
+      (i) AskUserQuestion fired (`action: ask_user` in same turn)
+      (ii) max_ralph_iterations exceeded (`action: max_iterations_hit` or
+           `action: checkpoint_via_route_d`)
+      (iii) Budget exceeded (`action: budget_exceeded`)
+      (iv) All Pending Blocked (`action: all_pending_blocked` + ASK_USER)
+
+    Audit logic:
+      - For each `action: done` entry in this turn, check if plan.md
+        currently has non-empty Pending section
+      - If Pending non-empty AND no escalation entry in same turn = MAJOR drift
+        `ralph_stopped_early`
+    """
+    plan_path = project_root / ".kiho" / "state" / "plan.md"
+    if not plan_path.exists():
+        return  # fresh project; no plan yet — not drift
+
+    # Naive Pending detection: count items under "## Pending" headers
+    try:
+        plan_text = plan_path.read_text(encoding="utf-8")
+    except Exception:
+        return
+
+    # Find all Pending sections (skip those marked done/empty)
+    pending_lines = []
+    in_pending = False
+    for line in plan_text.splitlines():
+        if line.strip().startswith("## Pending") or line.strip().startswith("### Pending") or "Pending" in line and line.startswith(("##", "###")):
+            in_pending = True
+            continue
+        if in_pending and line.startswith(("# ", "## ", "### ")):
+            in_pending = False
+            continue
+        if in_pending and line.strip().startswith(("|", "-", "*")) and not line.strip().startswith("---"):
+            # Filter out table separator + comment lines
+            content = line.strip().lstrip("|-* ").strip()
+            if content and not content.startswith("(") and "id" not in content[:5].lower():
+                pending_lines.append(content)
+
+    pending_nonempty = len(pending_lines) > 3  # threshold: ignore boilerplate header rows
+
+    if not pending_nonempty:
+        return  # plan empty or near-empty — no drift
+
+    # Find done entries
+    for i, e in enumerate(entries):
+        if (e.get("action") or "") != "done":
+            continue
+        # Walk back to last tier_declared / initialize for turn start
+        turn_start = 0
+        for j in range(i - 1, -1, -1):
+            a = entries[j].get("action") or ""
+            if a in ("tier_declared", "initialize"):
+                turn_start = j
+                break
+        window = entries[turn_start : i + 1]
+        # Check for legitimate escalation
+        escalation_actions = {
+            "ask_user",
+            "max_iterations_hit",
+            "checkpoint_via_route_d",
+            "budget_exceeded",
+            "all_pending_blocked",
+        }
+        has_escalation = any(
+            (w.get("action") or "") in escalation_actions for w in window
+        )
+        if not has_escalation:
+            drifts.append(
+                Drift(
+                    e.get("seq"),
+                    "major",
+                    "ralph_stopped_early",
+                    "ceo",
+                    f"action: done with non-empty plan.md Pending ({len(pending_lines)} items) and no escalation entry in turn",
+                    "v6.3 L-RALPH-PENDING-NONEMPTY: Ralph LOOP must continue iterating while Pending non-empty unless legitimate escalation (ask_user / max_iterations / budget_exceeded / all_pending_blocked)",
+                )
+            )
+
+
 def summarize(drifts: list[Drift]) -> dict:
     by_sev: dict[str, list[Drift]] = {"critical": [], "major": [], "minor": []}
     for d in drifts:
@@ -511,6 +645,11 @@ def main() -> int:
     # matching checkin; and OKR-topic committee closes emitted okr-set request.
     check_okr_hook_to_checkin(collected, drifts)
     check_committee_to_okr_set(collected, drifts)
+
+    # Fifth pass (v6.3+): KB integrate + ralph anti-stop discipline.
+    # See L-KB-MID-LOOP-MANDATORY and L-RALPH-PENDING-NONEMPTY lessons.
+    check_kb_integrate_discipline(collected, drifts)
+    check_ralph_anti_stop(collected, project_root, drifts)
 
     summary = summarize(drifts)
 

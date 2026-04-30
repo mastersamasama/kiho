@@ -99,6 +99,21 @@ Loading a sub-skill means reading its SKILL.md and applying its instructions. Yo
 - **Read `rules.md` before every add/update.** Reject writes that violate a rule; return `status: error` with the rule that was violated.
 - **Honor tier separation.** A request with `TIER: project` never touches company-tier files. Cross-tier operations happen only through `op=promote`.
 - **Preserve history.** Never hard-delete a page unless the request explicitly includes `hard_delete: true` AND CEO has user approval. Soft-delete sets `valid_until` and keeps the file readable.
+- **[v6.4] Honor the content-routing classifier (Lane-B gate).** When `op=add` is called with a proposed `decisions/`, `concepts/`, `conventions/`, `entities/`, or `synthesis/` entry, run the **Lane-B 4-of-4 heuristic check** on the staged content (see `agents/kiho-ceo.md` §INTEGRATE-classifier and `references/content-routing.md`):
+    1. Title is a generalisable noun phrase or imperative — uses `Use`/`Prefer`/`Always`/`Never`/`MUST`/`SHOULD`/`Avoid` OR is an abstract noun phrase (no feature/spec slug `BB-*`/`FU-*`/`s-*`).
+    2. Body would be useful 6 months later cold-read — no time-anchored "this turn we shipped X" framing dominating the body.
+    3. ≥1 reusable principle stated in 1–2 sentences without a load-bearing commit / file:line / source_seq citation.
+    4. Body cross-references ≥1 existing KB entry via `[[wikilink]]`.
+  If FEWER than 3 of 4 pass, REFUSE the write and return `status: rejected, reason: lane_mismatch, suggested_lane: state_decision | memory_write, suggested_action: <hint>`. The CEO MUST then re-route to Lane A (state_decision ledger entry + optional `.kiho/audit/` doc) or Lane C (memory-write skill) per the classifier. Do NOT silently accept and rely on `bin/ceo_behavior_audit.py` to catch it post-hoc — that's a v6.3 failure mode the classifier closes.
+- **[v6.4] Validate trigger-specific required fields** when `op=add --trigger=<A-F>`:
+    - `--trigger=A` (decision with reusable principle ≥0.90) — confidence field required, ≥0.90.
+    - `--trigger=B` (user explicit canonicalisation) — `user_quote` field populated with the verbatim user phrasing.
+    - `--trigger=C` (recurring-pattern detection) — `pattern_occurrences` (int ≥3) and `source_paths` (list) required.
+    - `--trigger=D` (spec/PRD section ingestion) — `prd_anchor` field required (path:section).
+    - `--trigger=E` (committee architectural choice) — `committee_id` link required.
+    - `--trigger=F` (code-review canonicalisation) — `affected_files` list with ≥3 entries.
+  Failure to supply trigger-specific fields → `status: rejected, reason: missing_trigger_field, required: [...]` so the CEO knows exactly which field to populate before retrying.
+- **[v6.4] `op=extract` sub-op for retroactive nucleus extraction.** Accepts `source_entry: <existing-decisions-path>`, `extracted_nuclei: [{type, slug, body}]`, `state_archive: <audit-path>`. Atomically: writes each nucleus as a fresh `concepts/` or `conventions/` entry; moves the source entry verbatim to `state_archive`; appends `action: state_decision` to `ceo-ledger.jsonl`; refreshes all 12 indexes. Used during retroactive cleanup of pre-v6.4 KB drift.
 
 ## Atomicity via drafts
 

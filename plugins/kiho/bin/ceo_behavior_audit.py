@@ -441,18 +441,25 @@ def check_approval_chains(entries: list[dict], drifts: list[Drift]) -> None:
             )
 
 
-def check_kb_integrate_discipline(entries: list[dict], drifts: list[Drift]) -> None:
-    """[v6.3 — L-KB-MID-LOOP-MANDATORY enforcement]
+def check_kb_integrate_or_classify_skipped(entries: list[dict], drifts: list[Drift]) -> None:
+    """[v6.3 — L-KB-MID-LOOP-MANDATORY enforcement; v6.4 extended]
 
-    Every iteration's confidence ≥0.90 decision MUST trigger immediate
-    `kb_add` OR explicit `kb_deferred` ledger entry. Silent skip is drift.
+    Every iteration's confidence ≥0.90 decision MUST trigger ONE of:
+      - kb_add (Lane B — durable project knowledge)
+      - state_decision (Lane A — turn-scoped artefact, v6.4+)
+      - memory_write (Lane C — cross-project reusable lesson, v6.4+)
+      - kb_deferred (explicit defer with reason)
+
+    Silent skip across ALL FOUR is drift.
 
     Audit logic:
       - Find every `subagent_return` entry with payload.confidence >= 0.90
         AND payload.status in {ok, complete}
-      - For each, verify a subsequent `kb_add` OR `kb_deferred` entry exists
-        within the same turn (between this entry and the next `done`/`tier_declared`)
-      - Missing match = MAJOR drift `kb_integrate_skipped`
+      - For each, verify a subsequent capture entry of any accepted kind
+        exists within the same turn (between this entry and the next
+        `done`/`tier_declared`)
+      - Missing match = MAJOR drift `kb_integrate_or_classify_skipped`
+        (v6.3 callers used `kb_integrate_skipped`; v6.4 unified the code)
     """
     high_conf_returns = []
     turn_boundaries = [0]  # seqs where new turn started
@@ -467,28 +474,163 @@ def check_kb_integrate_discipline(entries: list[dict], drifts: list[Drift]) -> N
             if conf is not None and conf >= 0.90 and status in ("ok", "complete"):
                 high_conf_returns.append((i, e))
 
+    accepted_actions = {
+        "kb_add",
+        "kb_add_batch",
+        "kb_deferred",
+        "state_decision",  # v6.4 Lane A
+        "memory_write",    # v6.4 Lane C
+    }
+
     for idx, return_entry in high_conf_returns:
         # Find the next turn boundary AFTER this return
         next_boundary = next(
             (b for b in turn_boundaries if b > idx), len(entries)
         )
-        # Look for kb_add or kb_deferred between idx+1 and next_boundary
+        # Look for any accepted capture action between idx+1 and next_boundary
         window = entries[idx + 1 : next_boundary]
-        has_kb = any(
-            (e.get("action") or "") in ("kb_add", "kb_deferred", "kb_add_batch")
-            for e in window
+        has_capture = any(
+            (e.get("action") or "") in accepted_actions for e in window
         )
-        if not has_kb:
+        if not has_capture:
             drifts.append(
                 Drift(
                     return_entry.get("seq"),
                     "major",
-                    "kb_integrate_skipped",
+                    "kb_integrate_or_classify_skipped",
                     return_entry.get("target") or "<unknown>",
-                    f"high-confidence return ({return_entry.get('payload', {}).get('confidence')}) without subsequent kb_add or kb_deferred entry",
-                    "v6.3 L-KB-MID-LOOP-MANDATORY: every confidence ≥0.90 decision MUST trigger kb_add (immediate) or kb_deferred (explicit defer with reason)",
+                    f"high-confidence return ({return_entry.get('payload', {}).get('confidence')}) without subsequent kb_add / state_decision / memory_write / kb_deferred entry",
+                    "v6.4 content-routing classifier: every confidence ≥0.90 decision MUST trigger one of {kb_add (Lane B), state_decision (Lane A), memory_write (Lane C), kb_deferred (explicit ambiguous)}",
                 )
             )
+
+
+# Backwards-compat alias for any external callers pinned to the v6.3 name.
+check_kb_integrate_discipline = check_kb_integrate_or_classify_skipped
+
+
+def check_kb_classification_drift(kb_root: Path, drifts: list[Drift], turn_from: str | None = None) -> None:
+    """[v6.4 — content-routing classifier counter-check]
+
+    Walk `<kb_root>/decisions/*.md` for entries whose body is state-shaped
+    (Lane A heuristics) but landed in KB anyway. State-ness score is a
+    weighted sum of 4 heuristic checks; score ≥0.50 = MAJOR drift.
+
+    Heuristics (from agents/kiho-ceo.md §INTEGRATE Lane A):
+      +0.30  body cites evidence_paths / source_seq / specific file:line
+             as load-bearing (e.g. "src/.../X.tsx:343" or "seq 264")
+      +0.25  title contains feature/spec slug pattern (D-FU-* / D-BB-* /
+             D-s-* / similar) without a generalising verb
+      +0.25  rationale section is >70% commit / screenshot / curl
+             citations rather than reusable principle
+      +0.20  zero outbound wikilinks (orphan in KB graph)
+    """
+    if not kb_root.exists():
+        return
+    decisions_dir = kb_root / "decisions"
+    if not decisions_dir.exists():
+        return
+
+    import re
+
+    # Compile detection regexes once
+    file_line_pattern = re.compile(r"\b[\w./\-]+\.\w+:\d+\b")
+    seq_pattern = re.compile(r"\b(?:source_seq|seq)\s*[:=]?\s*\d+", re.IGNORECASE)
+    screenshot_pattern = re.compile(r"\.(?:png|jpg|jpeg)\b", re.IGNORECASE)
+    feature_slug_pattern = re.compile(r"\b(?:D|CV|C|L)?-?(?:BB|FU|s)-[A-Z0-9-]+\b")
+    generalising_verbs = re.compile(r"\b(?:Use|Prefer|Always|Never|MUST|SHOULD|Avoid)\b", re.IGNORECASE)
+    wikilink_pattern = re.compile(r"\[\[[^\]]+\]\]")
+
+    for entry in sorted(decisions_dir.glob("*.md")):
+        try:
+            text = entry.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        # Parse frontmatter `date:` for --turn-from filter (grandfather pre-v6.4)
+        if turn_from:
+            date_match = re.search(r"^date:\s*([\d\-T:Z]+)", text, re.MULTILINE)
+            if date_match and date_match.group(1) < turn_from:
+                continue  # legacy entry — grandfathered
+
+        # Score
+        score = 0.0
+        body = text[:6000]  # first 50ish lines
+
+        # +0.30 evidence_paths cited
+        if (
+            file_line_pattern.search(body)
+            or seq_pattern.search(body)
+            or screenshot_pattern.search(body)
+        ):
+            score += 0.30
+
+        # +0.25 feature/spec slug in title without generalising verb
+        title_match = re.search(r"^title:\s*[\"']?(.+?)[\"']?$", text, re.MULTILINE)
+        title = title_match.group(1) if title_match else entry.stem
+        slug_in_title = bool(feature_slug_pattern.search(entry.stem) or feature_slug_pattern.search(title))
+        verb_in_title = bool(generalising_verbs.search(title))
+        if slug_in_title and not verb_in_title:
+            score += 0.25
+
+        # +0.25 rationale section is mostly citations
+        # Heuristic: if Verification / Sources / Screenshot blocks dominate body
+        rationale_section = re.search(
+            r"##\s*(?:Rationale|Verification)(.*?)(?=\n##\s|\Z)",
+            text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if rationale_section:
+            r_text = rationale_section.group(1)
+            citation_chars = sum(
+                len(m.group(0)) for m in file_line_pattern.finditer(r_text)
+            ) + sum(
+                len(m.group(0)) for m in screenshot_pattern.finditer(r_text)
+            )
+            if r_text and citation_chars / max(len(r_text), 1) > 0.07:
+                score += 0.25
+
+        # +0.20 zero outbound wikilinks
+        if not wikilink_pattern.search(body):
+            score += 0.20
+
+        if score >= 0.50:
+            drifts.append(
+                Drift(
+                    None,
+                    "major",
+                    "kb_state_artefact",
+                    entry.stem,
+                    f"KB entry {entry.stem} scores state-ness {score:.2f} (≥0.50 threshold) — likely belongs in state_decision ledger, not KB",
+                    f"v6.4 classifier: title={title!r}, slug_match={slug_in_title}, has_verb={verb_in_title}",
+                )
+            )
+
+
+def check_orphan_state_lessons(state_root: Path, drifts: list[Drift]) -> None:
+    """[v6.4] Lessons should live in agents/<name>/memory/lessons.md or
+    Claude Code's per-project memory, not in `.kiho/state/`. Detect
+    leaked `*-lesson*.md` / `lessons-*.md` files in state.
+    """
+    if not state_root.exists():
+        return
+    candidates = list(state_root.rglob("*-lesson*.md")) + list(
+        state_root.rglob("lessons-*.md")
+    )
+    for f in candidates:
+        # Skip the audit dir (legitimate to host lesson archives)
+        if "audit" in f.parts:
+            continue
+        drifts.append(
+            Drift(
+                None,
+                "minor",
+                "lesson_in_state_should_be_memory",
+                str(f.relative_to(state_root)),
+                f"lesson-shaped file {f.name} in state/ — route to agents/<name>/memory/lessons.md or ~/.claude/projects/<cwd>/memory/feedback_*.md",
+                "v6.4 content-routing classifier Lane C",
+            )
+        )
 
 
 def check_ralph_anti_stop(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
@@ -596,8 +738,14 @@ def summarize(drifts: list[Drift]) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="kiho v5.22 CEO behavior audit")
+    ap = argparse.ArgumentParser(description="kiho v6.4 CEO behavior audit")
     ap.add_argument("--ledger", required=True, type=Path, help="path to ceo-ledger.jsonl")
+    ap.add_argument(
+        "--kb-root",
+        default=None,
+        type=Path,
+        help="path to .kiho/kb/wiki/ (enables v6.4 classification-drift check)",
+    )
     ap.add_argument("--turn-from", default=None, help="ISO timestamp to filter from")
     ap.add_argument("--full", action="store_true", help="audit entire history incl. pre-v5.22")
     ap.add_argument("--json", action="store_true", help="emit JSON summary to stdout")
@@ -646,10 +794,20 @@ def main() -> int:
     check_okr_hook_to_checkin(collected, drifts)
     check_committee_to_okr_set(collected, drifts)
 
-    # Fifth pass (v6.3+): KB integrate + ralph anti-stop discipline.
+    # Fifth pass (v6.3+; renamed v6.4): KB integrate / classify + ralph anti-stop.
     # See L-KB-MID-LOOP-MANDATORY and L-RALPH-PENDING-NONEMPTY lessons.
-    check_kb_integrate_discipline(collected, drifts)
+    check_kb_integrate_or_classify_skipped(collected, drifts)
     check_ralph_anti_stop(collected, project_root, drifts)
+
+    # Sixth pass (v6.4+): content-routing drift counter-check. Walk KB
+    # decisions/ for state-shaped entries that landed in KB anyway. Also
+    # detect lesson-shaped files that leaked into state/ instead of memory.
+    kb_root = args.kb_root or (project_root / ".kiho" / "kb" / "wiki")
+    if kb_root.exists():
+        check_kb_classification_drift(kb_root, drifts, args.turn_from)
+    state_root = project_root / ".kiho" / "state"
+    if state_root.exists():
+        check_orphan_state_lessons(state_root, drifts)
 
     summary = summarize(drifts)
 

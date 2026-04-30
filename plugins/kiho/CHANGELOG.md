@@ -6,6 +6,78 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.4.0 (content-routing classifier — KB / State / Memory taxonomy)
+
+Closes a v6.3.0 failure mode: the new "every confidence ≥0.90 → kb_add" enforcement was correct in spirit but conflated three different content types, dumping turn-state-disguised-as-decisions into KB. The user surfaced this on 33Ledger 2026-04-30 after the previous turn produced 5 KB entries that an empirical audit classified as 80% turn artefact / 15% reusable principle / 5% memory-eligible. v6.4.0 adds the content-classification gate that v6.3.0 lacked.
+
+User signal that triggered this release (verbatim): *"not only kb, update the skill level, in other project should check this as well, why you determine as kb? ... kb is project related info/knowledge like what is the function of this module, should use what component in what case, when writing frontend should use theme system like this ... not just put every decision into kb, this is more closer to state instead of kb, and decision is better consolidate as memory if it can be reusable with reason taken."*
+
+### Three-lane taxonomy (deterministic classifier)
+
+| Lane | Destination | Heuristic gate |
+|---|---|---|
+| **A — STATE** | `.kiho/state/ceo-ledger.jsonl` (`action: state_decision`) + optional `.kiho/audit/<spec>/<turn>.md` | ≥1 of: evidence_paths cited / feature-spec slug without generalising verb / ≤1-sentence reusable principle / reversible by re-running plan |
+| **B — KB** | `.kiho/kb/wiki/<page-type>/` via `kiho-kb-manager op=add --trigger=<A-F>` | ≥3 of 4: generalisable noun-phrase or imperative title / 6-month-cold-read useful / reusable principle without commit ref / cross-references ≥1 KB entry |
+| **C — MEMORY** | `agents/<name>/memory/lessons.md` (skill) + `~/.claude/projects/<encoded-cwd>/memory/feedback_*.md` (feedback) | ≥1 of: L-* prefix or lesson/rule/discipline keyword / process-shaped not code-shaped / "we got burned by X" reason chain / domain-independent |
+
+Hybrid decisions (principle is KB, evidence is state) MUST split into TWO ledger entries — one per lane. Ambiguous classifications (no lane fits ≥3 heuristics) → `action: kb_deferred, reason: classification_ambiguous` with user surface in turn summary.
+
+### Six explicit KB-update trigger scenarios
+
+A KB write fires under ANY of six triggers, not only the v6.3 ≥0.90 confidence path:
+- **A** — decision with reusable principle ≥0.90 [legacy v6.3 path]
+- **B** — user explicit canonicalisation ("remember this", "always X", Chinese 「以後都要」) — bypasses confidence gate, routes to `conventions/`
+- **C** — recurring-pattern detection (3+ delegations same pattern in session)
+- **D** — spec/PRD section that defines a project-wide convention (capture on first read)
+- **E** — committee architectural choice ≥0.85 (routes to `decisions/` AND `synthesis/`)
+- **F** — code-review canonicalisation (Eng IC reports "pattern X repeated in N≥3 files")
+
+Triggers B and D bypass the confidence gate — explicit-intent paths. kb-manager validates trigger-specific required fields (`user_quote` for B, `prd_anchor` for D, `committee_id` for E, `affected_files[]` for F, etc.); missing fields → `status: rejected, reason: missing_trigger_field`.
+
+### Changes
+
+- **`agents/kiho-ceo.md`**:
+  - Two new Invariants: `[v6.4] Content-routing classifier` + `[v6.4] KB capture is multi-trigger`.
+  - LOOP step e (INTEGRATE) gains `[REQUIRED v6.4 — KB-update trigger scenarios]` block (six A-F triggers) + `[REQUIRED v6.4 — Content-routing classifier]` block (three lanes A/B/C with heuristics + hybrid + ambiguous handling).
+  - Existing `[REQUIRED v6.3]` block updated to be Lane-B-conditional + adds `--trigger=<A-F>` flag to `kb-manager op=add`.
+
+- **`bin/ceo_behavior_audit.py`**:
+  - Existing `check_kb_integrate_discipline` → renamed `check_kb_integrate_or_classify_skipped`; backwards-compat alias preserved. Now accepts ANY of `{kb_add, state_decision, memory_write, kb_deferred}` as valid follow-up to ≥0.90 `subagent_return`. Drift code renamed `kb_integrate_or_classify_skipped`.
+  - New `check_kb_classification_drift(kb_root, drifts, turn_from)` — walks `.kiho/kb/wiki/decisions/*.md`; computes weighted state-ness score (4 heuristics, 0.0-1.0); ≥0.50 → MAJOR drift `kb_state_artefact`. Use `--turn-from <iso>` to grandfather pre-v6.4 entries.
+  - New `check_orphan_state_lessons(state_root, drifts)` — flags `*-lesson*.md` / `lessons-*.md` files leaked into state/ (should be in memory). MINOR drift `lesson_in_state_should_be_memory`.
+  - New CLI flag `--kb-root <path>` to enable the classification-drift check.
+  - Wired into `main()` as a sixth pass after the existing fifth pass.
+
+- **`agents/kiho-kb-manager.md`** — three new invariants:
+  - `[v6.4] Lane-B 4-of-4 heuristic gate` — refuse writes that fail with `status: rejected, reason: lane_mismatch, suggested_lane: state_decision | memory_write`.
+  - `[v6.4] Trigger-specific required fields validator` — refuse with `status: rejected, reason: missing_trigger_field, required: [...]` if `--trigger=<A-F>` lacks its required fields.
+  - `[v6.4] op=extract sub-op` — atomically extracts durable nuclei from a source entry into fresh `concepts/` / `conventions/` entries, archives source to `.kiho/audit/`, refreshes all 12 indexes. Used during retroactive cleanup of pre-v6.4 KB drift.
+
+- **NEW `references/content-routing.md`** — full decision tree + 6 worked examples (2 per lane) + audit-script enforcement summary. Linked from kiho-ceo.md INTEGRATE block.
+
+### Smoke verification
+
+```bash
+python ${CLAUDE_PLUGIN_ROOT}/bin/ceo_behavior_audit.py \
+  --ledger <project>/.kiho/state/ceo-ledger.jsonl \
+  --kb-root <project>/.kiho/kb/wiki \
+  --turn-from 2026-04-30T00:00:00Z --json
+```
+
+Expected on 33Ledger as of 2026-04-30: status `major`, drifts include `kb_state_artefact` flagging 4-13 entries (depending on grandfather date) — D-FU-LEDGER-STICKY-OPAQUE / D-FU-NEW-FIAT-LIST-FIRST / D-FU-DARK-MODE-SWEEP / D-FU-ASSET-DETAIL-INDICATORS score ≥0.50 state-ness; D-FU-ASSETS-URL-COLLISION is genuinely hybrid and may pass.
+
+### Net scope
+
+- 4 files modified (`agents/kiho-ceo.md`, `bin/ceo_behavior_audit.py`, `agents/kiho-kb-manager.md`, `.claude-plugin/plugin.json`)
+- 1 file modified for narration (this CHANGELOG)
+- 1 new reference (`references/content-routing.md`)
+
+### Migration note
+
+Pre-v6.4 KB entries do NOT auto-fail `kb_state_artefact` IF you pass `--turn-from <v6.4-release-date>` to the audit script. Default `--turn-from` is null (no grandfather; flags every state-shaped entry regardless of age). Projects intending to grandfather their legacy KB should pass the v6.4 release date.
+
+---
+
 ## v6.3.0 (CEO discipline enforcement — auto-KB integrate + ralph anti-stop)
 
 Closes two long-running drift modes observed in real-world `/kiho` sessions: (1) the CEO routinely skipped mid-loop KB integration despite the LOOP step e text saying "never skip"; (2) the CEO routinely exited DONE while `plan.md` Pending still had items, claiming "next /kiho turn will continue". Both were textual rules without runtime enforcement; v6.3.0 adds the enforcement layer.

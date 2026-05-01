@@ -1,0 +1,70 @@
+# kiho i18n-audit allowlist (sk-087)
+#
+# Copy this file to `<project>/.kiho/config/i18n-allowlist.toml` and edit.
+# The audit script reads it via stdlib `tomllib` (Python 3.11+).
+# Schema is documented in skills/engineering/i18n-audit/references/i18n-quality.md.
+
+# Canonical locale name. Overridable at the CLI via --canonical.
+canonical = "en"
+
+
+[brands]
+# String values that may appear identical across locales (proper nouns,
+# product names, brand marks). The audit's "untranslated" check skips
+# any non-canonical value found in this list.
+values = [
+  "iCloud",
+  "Claude",
+  "OpenAI",
+  "Groq",
+  "33Ledger",
+  "Apple Pay",
+  "Touch ID",
+]
+
+
+[brands.keys]
+# Key glob patterns whose en/locale identical-value is intentional.
+# '*' matches any character span. Implicit anchoring: must match the
+# full dotted key, not a substring.
+match = [
+  "settings.ai.PROVIDER_*",
+  "settings.sync.ICLOUD",
+  "onboarding.SYNC_ICLOUD",
+]
+
+
+[hardcoded.allow_paths]
+# File paths exempt from the hardcoded-string check. Patterns are matched
+# against the project-root-relative POSIX path. Supports **, *, ?, {a,b}.
+#
+# NOTE: user-supplied patterns REPLACE the default test-path set; if you
+# customise this list, re-include the test-path globs you still want.
+patterns = [
+  "**/__tests__/**",
+  "**/*.test.{ts,tsx}",
+  "**/*.fixture.{ts,tsx}",
+]
+
+
+[deadkey.allow_keys]
+# Locale keys that are referenced dynamically (e.g. `t(`events.KIND_${k}`)`).
+# Any locale key whose dotted path starts with one of these prefixes
+# is treated as referenced and won't appear as a dead-key warning.
+#
+# Prefer narrow prefixes over broad ones — `events.KIND_` is good,
+# `events.` is too permissive and hides real dead keys.
+prefixes = [
+  # "events.KIND_",
+  # "transactions.TYPE_",
+]
+
+
+[deadkey.amnesty]
+# One-time grandfathered list of dead keys you intend to revisit later.
+# The audit suppresses warnings for these specific keys. The auto-bootstrap
+# mode (sk-087.v2) emits this section with the current dead-key set, so
+# projects can flip on --strict-warn without a big-bang cleanup.
+keys = [
+  # "ledger.OLD_REVERT_HINT",
+]

@@ -1,0 +1,55 @@
+# kiho i18n quality CI template (sk-087)
+#
+# Drop into <project>/.github/workflows/i18n-audit.yml and edit the three
+# project-specific paths (locales-dir, code-glob, config) for your tree.
+#
+# Stage 1 (warn-only): leave as-is. CI fails only on `fail` severity.
+# Stage 3 (strict): add `--strict-warn` to the audit command to also
+# fail on `warn` severity. See references/i18n-quality.md §"Project
+# rollout playbook".
+
+name: i18n quality
+
+on:
+  pull_request:
+    paths:
+      - 'apps/mobile/src/i18n/locales/**'
+      - 'apps/mobile/src/**/*.ts'
+      - 'apps/mobile/src/**/*.tsx'
+      - '.kiho/config/i18n-allowlist.toml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Checkout kiho-plugin
+        uses: actions/checkout@v4
+        with:
+          repository: mastersamasama/kiho
+          path: .kiho-plugin
+
+      - name: Run i18n audit
+        run: |
+          python .kiho-plugin/plugins/kiho/bin/i18n_audit.py \
+            --project-root . \
+            --locales-dir apps/mobile/src/i18n/locales \
+            --code-glob "apps/mobile/src/**/*.{ts,tsx}" \
+            --canonical en \
+            --config .kiho/config/i18n-allowlist.toml \
+            --json-out i18n-audit.json \
+            --md-out i18n-audit.md
+
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: i18n-audit
+          path: 'i18n-audit.*'

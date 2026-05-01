@@ -6,6 +6,27 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.5.0 — i18n-audit + theme-contrast-guard
+
+### Added
+- **sk-087 i18n-audit** (`skills/engineering/i18n-audit/`) — 5 deterministic checks for kiho-using projects: locale parity, placeholder integrity, untranslated keys, hardcoded user-visible strings, dead-key detection. Glossary clarity heuristic stub for v6.6. Surfaces via `/kiho evolve --audit=i18n` or auto-detect on `project-card.toml::i18n_locales_path`. Output JSON + markdown to `<project>/.kiho/audit/i18n/<iso-date>.md` (Lane A). Exit-code matrix: 0 clean / 1 warn (dead-key) / 2 fail (parity / placeholder / hardcoded) / 3 crash.
+- **sk-088 theme-contrast-guard** (`skills/engineering/theme-contrast-guard/`) — Layer 1 of 4-layer WCAG contrast defence. Reads `theme/tokens.ts` + optional `tokens.contract.ts`, computes fg×bg pair matrix per theme, fails on AA (4.5:1 body) / AAA (7:1 hero numbers) / 3.0:1 (large text & borders). Heuristic name-classifier when contract file missing — adoption forcing function for `tokens.contract.ts`. Surfaces via `/kiho evolve --audit=contrast`.
+- **References**: `references/i18n-quality.md`, `references/i18n-allowlist.example.toml`, `references/i18n-known-jargon.md` (advisory), `references/accessibility-doctrine.md`. WCAG 1.4.3 / 1.4.6 / 1.4.11 grounded.
+- **Templates**: `templates/i18n-audit.yml` (GitHub Action), `templates/eslint-kiho-config.template.cjs` (ESLint sidecar 3 rules), `templates/tokens.contract.template.ts`, `templates/runtime-contrast-warner.template.ts` (Layer 3 dev warner).
+
+### Smoke tests on 33Ledger
+- i18n-audit surfaced **3 real placeholder bugs** (`stats.tags.filterActive` ICU plural in `en.json` collapsed to plain `{count}` in zh-TW/zh-CN/ja — CLDR rules silently dropped) + 91 hardcoded user-visible strings + 108 dead-keys.
+- contrast-audit surfaced **1 heuristic-mode false-positive** (`pro.transfer` cross-product against `pro.tabPillActive`) — resolves by adopting `tokens.contract.ts` with explicit `pairsWith: ["bg", "surface"]`. Demonstrates the contract-adoption forcing function.
+
+### Closes drift detected on 33Ledger 2026-04-29 (i18n: 5 hardcoded ActionSheetIOS / a11y strings) and 2026-04-30 (theme: 27 files macaron.* + 5 files useColorScheme() + zero CI lint).
+
+### Migration
+- 33Ledger Day-1 (this turn): `apps/mobile/src/components/{AccountRow,BackHeader,FeeRuleComposer}.tsx`, `apps/mobile/src/screens/AssetProScreen.tsx` 4 hardcoded strings → `t()` (test fixture exempt).
+- 33Ledger Day-1 (this turn): `apps/mobile/src/theme/tokens.contract.ts` + `runtime-contrast-warner.ts` log-only Layer 3 wired in `__DEV__`.
+- Remaining sweeps (Turns 2-6): UX P3/P1/P2 (Rules sim → Inline edit → PnL display); ESLint sidecar lint roll-out + codemod; ThemeProvider context split.
+
+---
+
 ## v6.4.0 (content-routing classifier — KB / State / Memory taxonomy)
 
 Closes a v6.3.0 failure mode: the new "every confidence ≥0.90 → kb_add" enforcement was correct in spirit but conflated three different content types, dumping turn-state-disguised-as-decisions into KB. The user surfaced this on 33Ledger 2026-04-30 after the previous turn produced 5 KB entries that an empirical audit classified as 80% turn artefact / 15% reusable principle / 5% memory-eligible. v6.4.0 adds the content-classification gate that v6.3.0 lacked.

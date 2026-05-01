@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""kiho v6.5 i18n quality audit — deterministic 5-check framework.
+"""kiho v6.6.1 i18n quality audit — deterministic 6-check framework.
 
 Audits a kiho-using project's translation health:
   1. Locale parity — flatten each locale JSON to a key-set; diff vs canonical.
@@ -12,6 +12,10 @@ Audits a kiho-using project's translation health:
      options literals. Skip __tests__/, *.test.*, *.fixture.* paths.
   5. Dead-key detection — JSON keys never referenced via `t('key')` and not
      covered by a `// i18n-keep prefix=...` escape hatch.
+  6. Glossary clarity heuristic (v6.6.1, opt-in) — per-project
+     `.kiho/config/i18n-glossary.toml` declares max-char limits + forbidden
+     jargon per (key, locale). Missing file → silent skip; max-char is warn,
+     forbidden is fail. `[tone]` reserved for v2.1 NLP work.
 
 Style mirrors `bin/ceo_behavior_audit.py`: argparse, JSON or markdown out,
 deterministic exit-code matrix.
@@ -33,6 +37,7 @@ Usage:
     --code-glob "apps/mobile/src/**/*.{ts,tsx}" \\
     --canonical en \\
     --config .kiho/config/i18n-allowlist.toml \\
+    --glossary .kiho/config/i18n-glossary.toml \\
     --json-out i18n-audit.json \\
     --md-out i18n-audit.md
 """
@@ -67,7 +72,7 @@ EXIT_CRASH = 3
 
 @dataclass
 class Finding:
-    check: str          # parity | placeholder | untranslated | hardcoded | dead
+    check: str          # parity | placeholder | untranslated | hardcoded | dead | clarity
     severity: str       # fail | warn | info
     locale: str
     key: str
@@ -631,19 +636,137 @@ def check_dead_keys(
 
 
 # ---------------------------------------------------------------------------
-# Clarity heuristic v2 (stub — future work)
+# Check 6 — glossary clarity heuristic (v6.6.1, opt-in)
 # ---------------------------------------------------------------------------
 
 
-def _check_clarity_v2(*args: Any, **kw: Any) -> list[Finding]:  # noqa: ARG001 — v2 stub
-    """v2 hook for glossary-driven clarity audit (e.g., 沖正→撤銷 guidance).
+def load_glossary(path: Path | None) -> dict[str, Any] | None:
+    """Load `.kiho/config/i18n-glossary.toml`. Return None if file missing.
 
-    Intentionally returns no findings in v6.5 ship. Wire-up will read
-    `references/i18n-known-jargon.md` + project glossary.toml and emit
-    info-severity suggestions only. TODO: implement in v6.6.
+    Returns the parsed TOML as a dict on success. Missing file → None
+    (silent skip, opt-in semantics). Parse error / missing tomllib →
+    raises RuntimeError, which the caller turns into a single warn finding
+    so CI does not silently mis-adopt the file.
     """
-    del args, kw  # silence unused-warning until v6.6 wires the call sites
-    return []
+    if path is None or not path.exists():
+        return None
+    if tomllib is None:
+        raise RuntimeError(
+            "Python 3.11+ tomllib (or tomli) required to load glossary TOML; "
+            "install tomli or upgrade Python"
+        )
+    with path.open("rb") as f:
+        return tomllib.load(f)
+
+
+# Track whether the per-run "tone is v2.1, ignored" stub log has fired.
+_TONE_STUB_LOGGED = False
+
+
+def check_clarity(
+    locales: dict[str, dict[str, str]],
+    canonical: str,
+    glossary: dict[str, Any] | None,
+    state: AuditState,
+) -> None:
+    """Check 6 — per-key max-char (warn) + forbidden-jargon (fail) per locale.
+
+    `glossary` is the parsed TOML dict (None → silent skip, opt-in).
+    Schema (see `references/i18n-glossary-schema.md`):
+
+        [max_chars]
+        "common.REVERT" = { en = 6, "zh-TW" = 4, ... }
+
+        [forbidden]
+        "common.REVERT" = { "zh-TW" = ["沖正"], ... }
+
+        [tone]                      # v2.1 stub, ignored in v6.6.1
+        "common.REVERT" = "informal"
+    """
+    if glossary is None:
+        return  # opt-in: file missing → no-op
+
+    max_chars = glossary.get("max_chars") or {}
+    forbidden = glossary.get("forbidden") or {}
+    tone = glossary.get("tone") or {}
+
+    # 6a — max_chars (warn-severity)
+    if isinstance(max_chars, dict):
+        for key, locale_limits in sorted(max_chars.items()):
+            if not isinstance(locale_limits, dict):
+                continue
+            for locale_id, limit in sorted(locale_limits.items()):
+                if not isinstance(limit, int) or limit <= 0:
+                    continue
+                kv = locales.get(locale_id)
+                if kv is None or key not in kv:
+                    # missing locale or missing key — Check 1 already covers
+                    continue
+                value = kv[key]
+                if not value:
+                    continue
+                length = len(value)
+                if length > limit:
+                    state.add(
+                        check="clarity", severity="warn", locale=locale_id, key=key,
+                        evidence=(
+                            f"value {value!r} len={length} > "
+                            f"max_chars[{locale_id}]={limit}"
+                        ),
+                        suggestion=(
+                            f"shorten '{key}' for {locale_id} to <= {limit} chars; "
+                            f"see references/i18n-known-jargon.md for friendlier "
+                            f"alternatives"
+                        ),
+                    )
+
+    # 6b — forbidden jargon (fail-severity)
+    if isinstance(forbidden, dict):
+        for key, locale_words in sorted(forbidden.items()):
+            if not isinstance(locale_words, dict):
+                continue
+            for locale_id, words in sorted(locale_words.items()):
+                if not isinstance(words, list):
+                    continue
+                kv = locales.get(locale_id)
+                if kv is None or key not in kv:
+                    continue
+                value = kv[key]
+                if not value:
+                    continue
+                # Deterministic order: iterate in the user-declared order
+                # (TOML lists preserve order) but emit one finding per hit.
+                for word in words:
+                    if not isinstance(word, str) or not word:
+                        continue
+                    if word in value:
+                        state.add(
+                            check="clarity", severity="fail",
+                            locale=locale_id, key=key,
+                            evidence=(
+                                f"value {value!r} contains forbidden term {word!r}"
+                            ),
+                            suggestion=(
+                                f"replace {word!r} in '{key}' ({locale_id}) with "
+                                f"a friendlier alternative; see "
+                                f"references/i18n-known-jargon.md"
+                            ),
+                        )
+
+    # 6c — tone (v2.1 stub, log once per run if user populated the table)
+    if isinstance(tone, dict) and tone:
+        global _TONE_STUB_LOGGED
+        if not _TONE_STUB_LOGGED:
+            _TONE_STUB_LOGGED = True
+            print(
+                "info: i18n-glossary.toml [tone] block detected but tone "
+                "NLP is v2.1 work — entries ignored in v6.6.1",
+                file=sys.stderr,
+            )
+
+    # Reference canonical to silence unused-arg lint; future v2.1 may use it
+    # for canonical-vs-locale tone divergence detection.
+    del canonical
 
 
 # ---------------------------------------------------------------------------
@@ -721,7 +844,7 @@ def write_output(target: str | None, payload: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description="kiho v6.5 i18n quality audit (5 deterministic checks)",
+        description="kiho v6.6.1 i18n quality audit (6 deterministic checks)",
     )
     ap.add_argument("--project-root", required=True, type=Path)
     ap.add_argument("--locales-dir", required=True,
@@ -731,6 +854,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--canonical", default="en")
     ap.add_argument("--config", type=Path, default=None,
                     help="path to i18n-allowlist.toml (optional)")
+    ap.add_argument("--glossary", type=Path, default=None,
+                    help=("path to i18n-glossary.toml (optional, opt-in v2 "
+                          "clarity heuristic; default "
+                          ".kiho/config/i18n-glossary.toml under --project-root)"))
     ap.add_argument("--json-out", default=None,
                     help="path or '-' for stdout JSON")
     ap.add_argument("--md-out", default=None,
@@ -756,6 +883,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: failed to load config: {e}", file=sys.stderr)
         return EXIT_CRASH
 
+    # Glossary path resolution: explicit --glossary wins; otherwise default
+    # to <project-root>/.kiho/config/i18n-glossary.toml (silent skip if absent).
+    if args.glossary:
+        glossary_path: Path | None = args.glossary.resolve()
+    else:
+        default_glossary = project_root / ".kiho" / "config" / "i18n-glossary.toml"
+        glossary_path = default_glossary if default_glossary.exists() else None
+
     canonical = args.canonical or config.get("canonical", "en")
 
     state = AuditState()
@@ -776,9 +911,23 @@ def main(argv: list[str] | None = None) -> int:
             check_dead_keys(
                 project_root, args.code_glob, locales, canonical, config, state,
             )
-            # v2 clarity hook — currently no-op; preserves extension surface.
-            for f in _check_clarity_v2():
-                state.findings.append(f)
+            # Check 6 — glossary clarity heuristic (v6.6.1, opt-in).
+            try:
+                glossary = load_glossary(glossary_path)
+            except Exception as e:
+                # Glossary present but unloadable — emit one warn finding
+                # rather than crashing CI.
+                state.add(
+                    check="clarity", severity="warn", locale="-",
+                    key="<glossary>",
+                    evidence=f"failed to load {glossary_path}: {e}",
+                    suggestion=(
+                        "fix TOML syntax in i18n-glossary.toml or remove the "
+                        "file (Check 6 silently skips when missing)"
+                    ),
+                )
+                glossary = None
+            check_clarity(locales, canonical, glossary, state)
     except Exception:
         traceback.print_exc()
         return EXIT_CRASH

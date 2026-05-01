@@ -1,12 +1,20 @@
-# kiho i18n quality CI template (sk-087)
+# kiho i18n quality CI template (sk-087, strict default since v6.5 turn 5)
 #
 # Drop into <project>/.github/workflows/i18n-audit.yml and edit the three
 # project-specific paths (locales-dir, code-glob, config) for your tree.
 #
-# Stage 1 (warn-only): leave as-is. CI fails only on `fail` severity.
-# Stage 3 (strict): add `--strict-warn` to the audit command to also
-# fail on `warn` severity. See references/i18n-quality.md §"Project
-# rollout playbook".
+# DEFAULT — strict mode: any `fail` severity finding (incl. hardcoded code
+# strings, untranslated keys, broken placeholders) returns non-zero exit and
+# fails the build. The Python audit script returns 1 on fail, 2 with
+# `--strict-warn`. GitHub Actions treats any non-zero as failure.
+#
+# Opt-out — warn-only mode (legacy / Stage 1 rollout): append
+# `|| echo "audit warned"` to the audit command, OR set `continue-on-error:
+# true` on the step. NOT recommended past initial rollout.
+#
+# Stage 3 (max strict): also fail on `warn` severity by adding
+# `--strict-warn` to the audit command. See references/i18n-quality.md
+# §"Project rollout playbook".
 
 name: i18n quality
 
@@ -36,7 +44,7 @@ jobs:
           repository: mastersamasama/kiho
           path: .kiho-plugin
 
-      - name: Run i18n audit
+      - name: Run i18n audit (strict — fail build on `fail` severity)
         run: |
           python .kiho-plugin/plugins/kiho/bin/i18n_audit.py \
             --project-root . \
@@ -46,6 +54,9 @@ jobs:
             --config .kiho/config/i18n-allowlist.toml \
             --json-out i18n-audit.json \
             --md-out i18n-audit.md
+        # Step exits non-zero on any fail-severity finding; GitHub fails the
+        # job. Remove this comment or add `continue-on-error: true` only for
+        # the legacy warn-only Stage 1 rollout window.
 
       - name: Upload audit artifacts
         if: always()

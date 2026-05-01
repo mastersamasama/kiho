@@ -2,7 +2,7 @@
 id: sk-087
 name: i18n-audit
 title: i18n quality auditor for kiho-using projects
-description: 5 deterministic checks (parity, placeholder, untranslated, hardcoded, dead-key) + glossary opt-in clarity heuristic v2. Surfaces via /kiho evolve --audit=i18n.
+description: 6 deterministic checks (parity, placeholder, untranslated, hardcoded, dead-key, glossary clarity v6.6.1 opt-in). Surfaces via /kiho evolve --audit=i18n.
 domain: engineering
 capability: evaluate
 topic_tags: [validation, i18n, locales]
@@ -14,7 +14,7 @@ created: 2026-05-01
 
 # i18n-audit (sk-087)
 
-A read-only translation-health auditor for any kiho-using project. Runs five deterministic checks against the project's locale JSON tree and source code, emits JSON + markdown reports, and returns a CI-actionable exit code.
+A read-only translation-health auditor for any kiho-using project. Runs six deterministic checks against the project's locale JSON tree and source code, emits JSON + markdown reports, and returns a CI-actionable exit code. Check 6 (glossary clarity, v6.6.1+) is **opt-in** — the audit silently skips it when no glossary file is present.
 
 ## When to invoke
 
@@ -33,6 +33,7 @@ Three entry points:
 | `--code-glob` | yes | glob RELATIVE to project-root, e.g. `apps/mobile/src/**/*.{ts,tsx}` |
 | `--canonical` | no | canonical locale name (default `en`) |
 | `--config` | no | path to `i18n-allowlist.toml` (defaults applied if missing) |
+| `--glossary` | no | path to `i18n-glossary.toml` (Check 6 opt-in; default `<project-root>/.kiho/config/i18n-glossary.toml` — silently skipped if absent) |
 | `--json-out` | no | path or `-` for stdout |
 | `--md-out` | no | path or `-` for stdout |
 | `--strict-warn` | no | promote warns to fails (CI hard-stop) |
@@ -52,7 +53,7 @@ If neither `--json-out` nor `--md-out` is given, JSON is printed to stdout for e
   },
   "findings": [
     {
-      "check": "parity|placeholder|untranslated|hardcoded|dead",
+      "check": "parity|placeholder|untranslated|hardcoded|dead|clarity",
       "severity": "fail|warn|info",
       "locale": "zh-TW",
       "key": "common.REVERT",
@@ -78,7 +79,7 @@ Same data grouped by severity, then by check. Each finding includes copy-pasteab
 
 `--strict-warn` flips warn → fail for projects that want zero-warn CI.
 
-## The 5 checks
+## The 6 checks
 
 | # | Check | Severity | What it catches |
 |---|---|---|---|
@@ -87,8 +88,9 @@ Same data grouped by severity, then by check. Each finding includes copy-pasteab
 | 3 | **untranslated** | warn | Non-canonical value identical to canonical value, minus brand allowlist. |
 | 4 | **hardcoded** | fail | Source-code regex scan for `<Text>literal</Text>`, `accessibilityLabel="literal"`, `Alert.alert("title", "msg")`, `ActionSheetIOS` options. |
 | 5 | **dead** | warn | Locale key not referenced via `t('...')` and not covered by `// i18n-keep` escape hatch or allowlist prefix. |
+| 6 | **clarity** (v6.6.1, opt-in) | warn (max-char) / fail (forbidden) | Per-project `i18n-glossary.toml` declares max-char limits + forbidden jargon per (key, locale). Missing file → silent skip. `[tone]` block reserved for v2.1 NLP work; v6.6.1 ignores it with a one-shot stderr log. |
 
-See `references/i18n-quality.md` for full heuristic spec.
+See `references/i18n-quality.md` for full heuristic spec; see `references/i18n-glossary-schema.md` for the Check 6 schema.
 
 ## Invariants
 
@@ -167,7 +169,32 @@ Finding:
  "suggestion":"remove 'events.KIND_LEGACY_TRANSFER' from en.json (and sibling locales), OR add `// i18n-keep events.KIND_LEGACY_TRANSFER` near the dynamic call site, OR add prefix to [deadkey.allow_keys].prefixes"}
 ```
 
-### 6. clean run
+### 6. clarity — glossary forbidden jargon (v6.6.1 Check 6, opt-in)
+
+```
+zh-TW.json: common.REVERT = "沖正修正処理"
+.kiho/config/i18n-glossary.toml:
+  [max_chars]
+  "common.REVERT" = { "zh-TW" = 4 }
+  [forbidden]
+  "common.REVERT" = { "zh-TW" = ["沖正"] }
+```
+
+Findings (one warn for length, one fail for jargon):
+```json
+[
+  {"check":"clarity","severity":"warn","locale":"zh-TW","key":"common.REVERT",
+   "evidence":"value '沖正修正処理' len=6 > max_chars[zh-TW]=4",
+   "suggestion":"shorten 'common.REVERT' for zh-TW to <= 4 chars; see references/i18n-known-jargon.md"},
+  {"check":"clarity","severity":"fail","locale":"zh-TW","key":"common.REVERT",
+   "evidence":"value '沖正修正処理' contains forbidden term '沖正'",
+   "suggestion":"replace '沖正' in 'common.REVERT' (zh-TW) with a friendlier alternative"}
+]
+```
+
+If `i18n-glossary.toml` does not exist, Check 6 emits zero findings (opt-in).
+
+### 7. clean run
 
 ```
 $ python bin/i18n_audit.py --project-root <p> --locales-dir <d> --code-glob "<g>" --canonical en
@@ -178,11 +205,13 @@ $ echo $?
 
 ## Cross-references
 
-- `references/i18n-quality.md` — full heuristic catalogue and v2 clarity preview
-- `references/i18n-allowlist.example.toml` — TOML schema with comments
-- `references/i18n-known-jargon.md` — advisory glossary input for v2
+- `references/i18n-quality.md` — full heuristic catalogue (incl. v6.6.1 clarity heuristic)
+- `references/i18n-allowlist.example.toml` — Checks 1–5 TOML schema with comments
+- `references/i18n-glossary-schema.md` — Check 6 TOML schema (v6.6.1 opt-in)
+- `references/i18n-known-jargon.md` — advisory jargon list to copy into project glossaries
+- `tests/test_i18n_audit_glossary.py` — Check 6 synthetic acceptance + unit suite
 - `templates/i18n-audit.yml` — GitHub Action template
-- `bin/i18n_audit.py` — implementation (~470 LOC, stdlib only)
+- `bin/i18n_audit.py` — implementation (stdlib only, Python 3.11+ for tomllib)
 
 ## Rollout playbook (project adoption)
 
@@ -191,6 +220,6 @@ $ echo $?
 3. **Strict mode.** Once the report is clean, add `--strict-warn` to CI to lock in the gate.
 4. **Periodic re-baseline.** When adding a locale, re-run with `--canonical en` to catch new parity gaps before merge.
 
-## Future hooks (v2)
+## Future hooks (v2.1)
 
-The clarity heuristic v2 (sk-087.v2) will read a project-level `glossary.toml` plus `references/i18n-known-jargon.md` to surface high-register terms (e.g., 沖正 vs 撤銷 in zh-TW accounting flows). v6.5 ships with a stub `_check_clarity_v2()` that returns no findings — extension surface only.
+Check 6's `[tone]` block (`"common.REVERT" = "informal"`) is reserved for v2.1 NLP work. v6.6.1 detects the block and emits a one-shot stderr log advising that entries are ignored, but produces no findings. The schema is preserved so projects can populate it now and have it become live in v2.1 without a migration. Track via plan §B1 v2.1.

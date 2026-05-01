@@ -6,6 +6,39 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.6.1 — i18n Check 6: per-project glossary clarity heuristic (opt-in) — 2026-05-01
+
+### Added — Check 6 (clarity heuristic, additive, warn-default)
+
+The i18n audit (sk-087) v6.5 shipped 5 deterministic checks plus a `_check_clarity_v2()` stub. v6.6.1 lands the real Check 6 — a per-project, **opt-in** glossary that lets a team declare per-locale max-char ceilings and forbidden-jargon deny lists per i18n key.
+
+- `plugins/kiho/bin/i18n_audit.py` — new `load_glossary()` + `check_clarity()` wired into `main()`. Stdlib only (`tomllib` py311+; `tomli` fallback). New CLI flag `--glossary <path>` (default `<project-root>/.kiho/config/i18n-glossary.toml`).
+- `plugins/kiho/references/i18n-glossary-schema.md` — full schema doc for `[max_chars]`, `[forbidden]`, `[tone]` (v2.1 reservation).
+- `plugins/kiho/tests/test_i18n_audit_glossary.py` — 13-test unit + acceptance suite covering the spec-mandated synthetic fixture (zh-TW `沖正修正処理` → `clarity_max_chars` warn at limit 4).
+- `plugins/kiho/references/i18n-known-jargon.md` — refreshed framing to "advisory menu"; copy-paste starters for consumer-ledger and finance-pro app shapes.
+- `plugins/kiho/references/i18n-quality.md` + `plugins/kiho/skills/engineering/i18n-audit/SKILL.md` — Check 6 row added to severity matrices, worked example #6 (clarity), `--glossary` flag documented in the inputs table.
+
+### Severity contract
+
+- `max_chars` violations are **`severity: warn`** — tight per-locale ceilings are aspirational; `--strict-warn` projects can still hard-gate them.
+- `forbidden` jargon hits are **`severity: fail`** — a deny-listed term is an explicit editorial decision the project has already made; CI should block.
+- `[tone]` is reserved for v2.1 NLP work and emits **no findings** in v6.6.1; a one-shot stderr log fires per run when the block is non-empty so users know entries are seen but not enforced.
+
+### Why opt-in matters
+
+Localisation choice is editorial. A finance-pro app may legitimately want `沖正`; a consumer ledger app may want `撤銷`. The framework refuses to pick formal-vs-friendly for the project. v1 (Checks 1–5) users see no behaviour change unless they create `.kiho/config/i18n-glossary.toml` themselves — a missing file is a silent skip, not a warn.
+
+### Patch-level rationale
+
+Pure additive: no existing finding shape changed, no exit-code semantics changed, no v1 input requirement added. Hence patch bump (6.6.0 → 6.6.1) rather than minor.
+
+### Migration
+
+- v1 i18n audit users on v6.5/v6.6: no action required. Check 6 self-skips when no glossary file exists.
+- Projects opting in: create `<project>/.kiho/config/i18n-glossary.toml` per the schema in `references/i18n-glossary-schema.md`. Start small — three or four button-label keys with tight max-char limits is a viable Stage 1.
+
+---
+
 ## v6.6.0 — Lint sidecar multi-tool support (Biome + Oxlint) — 2026-05-01
 
 ### Added — Layer 2 sidecar now ships four toolchain paths

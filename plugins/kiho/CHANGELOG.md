@@ -6,6 +6,16 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.6.4 — 2026-05-02
+
+### Behavior change
+- **INTEGRATE goes from detect-only to auto-fix.** v6.6.3 detected when audit MDs had "Lane B candidate" prose without ledger `kb_add_called`, blocked `status: complete`, and routed to Route D checkpoint — leaving the actual kb-add for the next turn. User feedback: that's still drift; a candidate drafted now should be integrated NOW. v6.6.4 patches `agents/kiho-ceo.md` LOOP step f.INTEGRATE to make CEO **self-detect candidate prose mid-loop and auto-spawn `kiho:kiho-kb-manager`** before continuing. The v6.6.3 audit detector remains as a safety net, with its docstring updated to reflect the new architectural role (primary path: persona auto-fix; backstop: post-hoc audit).
+- `bin/ceo_behavior_audit.py` `check_integrate_drift` docstring rewrite (no logic change) — clarifies the detector's now-secondary role.
+
+Surfaced by 33Ledger 2026-05-02 turn 4 user audit ("have you update kiho to let kiho auto update the kb in the above cases?"). Closes the gap from v6.6.3 detect-only.
+
+---
+
 ## v6.6.3 — catch silent INTEGRATE skip in audit MDs — 2026-05-02
 
 ### Bug fixes

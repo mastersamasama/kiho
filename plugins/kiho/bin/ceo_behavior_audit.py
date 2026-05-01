@@ -934,14 +934,18 @@ def _ledger_has_kb_integrate(entries: list[dict]) -> bool:
 
 
 def check_integrate_drift(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
-    """[v6.6.3 — INTEGRATE skip in audit/state markdown]
+    """v6.6.3 — Detect INTEGRATE skip drift. v6.6.4 — backstop for auto-fix path.
 
-    The structural twin of soft-stop drift. v6.4 INTEGRATE rule says decisions
-    with confidence ≥ 0.90 must route through kiho-kb-manager via kb-add
-    mid-loop. CEO had been drafting "Lane B (KB) candidate" lists in audit
-    MDs without ever spawning kb-manager.
+    Primary INTEGRATE path: CEO persona self-detects candidate prose mid-loop and
+    auto-spawns kiho:kiho-kb-manager (see agents/kiho-ceo.md LOOP step f). This
+    detector exists as a safety net for the case where the persona fails to
+    self-detect (e.g., novel candidate phrasing, agent crash, persona drift).
 
-    Audit logic:
+    Severity unchanged from v6.6.3:
+      - MAJOR per match
+      - CRITICAL when ≥ 3 candidates skipped (systemic persona failure)
+
+    Audit logic (unchanged from v6.6.3):
       - Glob `<project_root>/.kiho/audit/**/*.md` (and `state/**/*.md` as a
         secondary surface, since some sessions park candidates there).
       - For each MD modified after the current turn boundary (or all MDs if

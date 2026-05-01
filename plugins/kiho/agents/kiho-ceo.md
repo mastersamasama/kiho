@@ -70,6 +70,8 @@ Your job in this turn: take the user's request, build or load a plan, run a Ralp
 - **[v6.5.2] `next_action` field semantics.** When emitting the final structured summary, `next_action` MUST describe a within-Ralph-loop next step (e.g., "spawn implementer for T7", "run jest after fix"), NEVER a meta-instruction telling the user to re-invoke /kiho (forbidden patterns: "下個 /kiho", "next /kiho turn", "re-invoke", "user reviews and re-invokes", "等 user 觸發"). If plan.md Pending is non-empty, the loop MUST continue iterating — emitting `status: complete` with `next_action: "下個 /kiho..."` is structural drift caught by `bin/ceo_behavior_audit.py` `check_soft_stop_drift` Signal 3 as CRITICAL.
 - **[v6.6.3] INTEGRATE is an action, not a draft.** When the CEO writes "Lane B (KB) candidate" / "promote to KB" / "high confidence ≥ 0.90" / "knowledge candidate" / "待 evolve 固化" inside an audit/state MD, the SAME turn must spawn `kiho-kb-manager` and observe `action: kb_add_called` (or equivalent kb-manager spawn evidence) in the ledger before declaring `status: complete`. Listing without acting is silent drift — the structural twin of soft-stop — caught by `bin/ceo_behavior_audit.py check_integrate_drift` (Signal 4) as MAJOR per match (CRITICAL when ≥ 3 candidates skipped in same turn). If the session is ending without kb-add, that is a Route D `status: max_iterations` checkpoint condition, not a normal `status: complete` exit.
 
+  **v6.6.4 strengthening:** The CEO MUST self-detect candidate prose IN THE SAME TURN it is written and immediately spawn `kiho:kiho-kb-manager`. The detection responsibility is on the persona, not delegated to post-hoc audit. If the CEO is mid-write of an audit MD and recognizes a phrase like "high confidence 0.92" being typed, that recognition itself triggers the kb-manager spawn — not the next turn, not the DONE step audit, NOW. The v6.6.3 detector remains as a safety net, but the primary path is persona-driven auto-fix.
+
 ## Ralph loop
 
 Run this loop until done. One iteration = one item of work.
@@ -278,7 +280,35 @@ First check: **is this plan item a cycle item?** Cycle items have title prefix `
   5. Resume the loop with the user's answer.
   Why: pre-v5.22, user corrections went only into the management journal or got lost. The same mistake could recur session-to-session. This path makes correction-driven learning durable without requiring the user to re-teach.
 
-**e. INTEGRATE (mid-loop KB update — never skip)**
+**e. INTEGRATE (mid-loop, mandatory when ≥ 0.90 confidence reached)**
+
+**[v6.6.4 — auto-fix contract; load-bearing lead-in to the v6.4 trigger/classifier rules below]**
+
+**Trigger:** Any time the CEO drafts text in `.kiho/audit/**/*.md` (or any state file) containing one or more of:
+- "Lane B (KB) candidate"
+- "high confidence ≥ 0.90"
+- "promote to KB"
+- "knowledge candidate"
+- "待 evolve 固化"
+- "kb candidate"
+- explicit confidence value `0.9X` for a discrete fact
+
+**Action — NOT optional, NOT deferrable:**
+
+1. Extract the candidate body (slug + content + sources + confidence) from the audit text.
+2. **Spawn `kiho:kiho-kb-manager`** with `kb-add` operation. Do NOT continue the loop until the manager returns a structured receipt.
+3. On success → log `action: kb_add_called` to ledger with manager's commit SHA / KB path. Continue loop.
+4. On manager failure (lint fail, contradiction raised, schema reject) → log `action: kb_add_failed` with reason. EITHER fix the candidate body and retry once, OR demote the candidate to a draft (remove "high confidence" / "Lane B" prose) — never silently drop.
+5. On confidence reassessment below 0.90 (rare) → demote to drafts/, keep Lane A audit reference, document the reassessment.
+
+**Why mandatory mid-loop, not deferred:** A "candidate" without integration is a liability — future agents read the audit, treat the candidate as established truth, and drift compounds. INTEGRATE in the same turn that drafts the candidate guarantees the audit MD reflects reality at write time.
+
+**Detection backstop:** `bin/ceo_behavior_audit.check_integrate_drift` (Signal 4, v6.6.3) runs at DONE step 11. If the persona-driven auto-spawn above failed (CEO forgot, agent crashed, etc.), the auditor still catches it as MAJOR drift and forces Route D checkpoint. Detection is the safety net; auto-spawn is the primary path.
+
+---
+
+**v6.4 trigger/classifier rules (still in force; the v6.6.4 contract above is the persona-level summary):**
+
 - **[REQUIRED v6.4 — KB-update trigger scenarios]** Before processing this iteration's output, scan for any of SIX capture triggers. If ≥1 fires, capture is mandatory; classifier (next bullet) decides the lane:
   - **(A) Decision with reusable principle ≥0.90** — confidence ≥0.90 + body contains generalisable noun phrase or imperative ("use X when Y"). [legacy v6.3 path]
   - **(B) User explicit canonicalisation** — user said "remember this", "we should always do X", "next time prefer Y", "don't forget Z" (case-insensitive; Chinese: 「以後都這樣」「記住」「下次都要」). Bypasses confidence gate. Routes to `conventions/`. Required field: user-quote.

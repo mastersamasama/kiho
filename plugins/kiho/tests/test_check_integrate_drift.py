@@ -8,12 +8,14 @@ Run from repo root with:
 Or directly:
     python plugins/kiho/tests/test_check_integrate_drift.py
 
-Tests (5 cases, mapping to v6.6.3 spec §5):
+Tests (6 cases — v6.6.3 §5 + v6.6.4 auto-fix happy path):
   1. clean         — no candidate keywords in MD                     → no drift
   2. bare match    — 1 "Lane B (KB) candidate", 0 kb_add_called      → MAJOR drift
   3. systemic      — 4 "high confidence ≥ 0.90", 0 kb_add_called     → CRITICAL drift (≥3)
   4. resolved      — 2 candidates + 2 kb_add_called in ledger        → no drift
   5. integrated    — candidate line carries [INTEGRATED commit ABCD] → no drift
+  6. v6.6.4 auto   — persona self-spawned kb-manager mid-loop AND
+                     audit MD carries [INTEGRATED commit ABCD]       → no drift
 """
 from __future__ import annotations
 
@@ -144,6 +146,29 @@ class CheckIntegrateDriftTest(unittest.TestCase):
             drifts,
             [],
             f"[INTEGRATED ...] marker should suppress the candidate line, got {drifts}",
+        )
+
+    def test_6_v664_persona_auto_fix_happy_path(self):
+        """v6.6.4: when CEO persona self-detects and spawns kb-manager mid-loop,
+        the ledger ends with kb_add_called and the audit MD has [INTEGRATED ...]
+        marker. Detector should NOT flag drift in this happy path.
+
+        Why both signals together: the [INTEGRATED ...] marker proves the audit
+        MD reflects post-spawn reality (line-level suppression), and the ledger
+        kb_add_called proves the spawn actually happened (turn-level
+        suppression). Either alone is enough; both together is the canonical
+        v6.6.4 footprint.
+        """
+        body = (
+            "# Audit 2026-05-02\n"
+            "## Findings\n"
+            "- Lane B (KB) candidate: CV-FOO 0.92 [INTEGRATED commit abc123 wiki/decisions/CV-FOO.md] — auto-spawned kb-manager mid-loop.\n"
+        )
+        drifts = self._run(body, ["kb_add_called"])
+        self.assertEqual(
+            drifts,
+            [],
+            f"v6.6.4 happy path (persona auto-fix + [INTEGRATED ...] marker) should produce no drift, got {drifts}",
         )
 
 

@@ -27,13 +27,19 @@
 // ---------------------------------------------------------------------------
 
 export type ColorRole =
-  | "fg"        // foreground text — pairs against ALL bg tokens (cross-product)
-  | "bg"        // primary background surface
-  | "fg-on"     // foreground intended for a SPECIFIC bg only — REQUIRES pairsWith
-  | "border"    // 1px UI lines / dividers — 3.0:1 floor (WCAG 1.4.11)
-  | "glow"      // decorative drop-shadow / ambient glow — excluded from matrix
-  | "shadow"    // box-shadow colour — excluded from matrix
-  | "scrim";    // modal overlay / glassmorphism backdrop — excluded from matrix
+  | "fg"          // foreground text — pairs against ALL bg tokens (cross-product)
+  | "bg"          // primary background surface
+  | "fg-on"       // foreground intended for a SPECIFIC bg only — REQUIRES pairsWith
+  | "border"      // UI line you DO want audited at 3.0:1 (WCAG 1.4.11)
+  | "hairline"    // sub-3px divider / 1px translucent rule — designer-accepted
+                  //   below 3:1; excluded from matrix because SC 1.4.11 does
+                  //   not apply cleanly to sub-pixel rendering
+  | "decorative"  // chip-on-chip, accent-on-accent, neon-PnL hue glyphs that
+                  //   carry NO information beyond an adjacent body-text label —
+                  //   excluded from matrix (explicit designer waiver)
+  | "glow"        // decorative drop-shadow / ambient glow — excluded from matrix
+  | "shadow"      // box-shadow colour — excluded from matrix
+  | "scrim";      // modal overlay / glassmorphism backdrop — excluded from matrix
 
 export interface TokenSpec {
   /** Hex (`#1A1A1F`, `#FFF`) or rgba (`rgba(26, 26, 31, 0.06)`). */

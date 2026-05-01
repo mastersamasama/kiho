@@ -13,6 +13,19 @@ Threshold strategy (user-locked in plan §C2):
   - large text or border       >= 3.0  (WCAG 2.1 SC 1.4.11)
   - small-text RN font dp 1:1 = pt (mobile approximation)
 
+Role taxonomy (matrix-eligible vs matrix-excluded):
+  matrix-eligible:    fg, fg-on, bg, border
+  matrix-excluded:    glow, shadow, scrim          (decorative chrome)
+                      hairline                     (1px UI lines designer-accepted
+                                                    below 3:1 — sub-pixel rendering
+                                                    means SC 1.4.11 cannot apply
+                                                    cleanly anyway)
+                      decorative                   (chip-on-chip, accent-on-accent,
+                                                    neon-PnL hue glyphs that DO NOT
+                                                    carry information beyond an
+                                                    adjacent body-text label —
+                                                    explicit designer waiver)
+
 Hero tokens are detected via either:
   - --hero-tokens flag (comma-separated token names), default `heroNumber,netWorth`
   - or convention: token name contains hero|primary|featured (case-insensitive)
@@ -146,7 +159,7 @@ _THEME_BUNDLE_RE = re.compile(
 _CONTRACT_TOKEN_RE = re.compile(
     r"""(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{
         \s*value\s*:\s*["'](?P<value>[^"']+)["']\s*,
-        \s*role\s*:\s*["'](?P<role>fg|bg|fg-on|border|glow|shadow|scrim)["']
+        \s*role\s*:\s*["'](?P<role>fg|bg|fg-on|border|hairline|decorative|glow|shadow|scrim)["']
         (?:\s*,\s*pairsWith\s*:\s*\[(?P<pairs>[^\]]*)\])?
         \s*,?\s*\}""",
     re.VERBOSE,
@@ -169,7 +182,9 @@ _HERO_NAME_HINT = re.compile(r"\b(hero|primary|featured|netWorth)\b", re.I)
 class TokenSpec:
     name: str
     value: str
-    role: str          # "fg" | "bg" | "fg-on" | "border" | "glow" | "shadow" | "scrim" | "unknown"
+    # "fg" | "bg" | "fg-on" | "border" | "hairline" | "decorative"
+    # | "glow" | "shadow" | "scrim" | "unknown"
+    role: str
     pairs_with: list[str] = field(default_factory=list)
 
 

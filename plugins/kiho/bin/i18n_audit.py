@@ -440,6 +440,13 @@ HARDCODED_ALERT_RE = re.compile(
     r'Alert\.alert\s*\(\s*["\']([^"\'\n]{2,120})["\']'
     r'(?:\s*,\s*["\']([^"\'\n]{2,200})["\'])?'
 )
+# 4c.1 (v6.5.1): split-finding variant of HARDCODED_ALERT_RE — emits a separate
+# finding for the title literal AND the body literal so each can be tracked /
+# i18n-keyed independently. Catches Alert.alert("Title","Body", ...) pairs
+# where BOTH operands are string literals (not t() calls or variables).
+ALERT_LITERAL_RE = re.compile(
+    r'Alert\.alert\(\s*["\']([^"\'\n]+)["\']\s*,\s*["\']([^"\'\n]+)["\']'
+)
 # 4d: ActionSheetIOS.showActionSheetWithOptions({ options: [...literals...] })
 ACTIONSHEET_BLOCK_RE = re.compile(
     r"ActionSheetIOS\.showActionSheetWithOptions\s*\(\s*\{[^}]*options\s*:\s*\[([^\]]*)\]",
@@ -518,6 +525,31 @@ def _scan_alert(text: str, rel: str, state: AuditState) -> None:
             evidence=f"{rel}:{line}",
             suggestion=f"replace Alert.alert({literal}) with Alert.alert(t('alerts.TITLE'), t('alerts.MESSAGE'))",
         )
+    # v6.5.1: split-finding sweep — emit one finding per literal operand
+    # (title + body) when BOTH are string literals. Lets callers track each
+    # piece independently in their i18n key inventory.
+    seen_offsets: set[int] = set()
+    for m in ALERT_LITERAL_RE.finditer(text):
+        if m.start() in seen_offsets:
+            continue
+        seen_offsets.add(m.start())
+        title = m.group(1).strip()
+        body = m.group(2).strip()
+        line = _line_of(text, m.start())
+        if title and not DEV_LOG_PREFIX_RE.match(title):
+            state.add(
+                check="hardcoded", severity="fail", locale="-",
+                key="<alert-title>",
+                evidence=f"{rel}:{line}",
+                suggestion=f"replace Alert.alert title literal {title!r} with t('alerts.<KEY>_TITLE')",
+            )
+        if body and not DEV_LOG_PREFIX_RE.match(body):
+            state.add(
+                check="hardcoded", severity="fail", locale="-",
+                key="<alert-body>",
+                evidence=f"{rel}:{line}",
+                suggestion=f"replace Alert.alert body literal {body!r} with t('alerts.<KEY>_BODY')",
+            )
 
 
 def _scan_actionsheet(text: str, rel: str, state: AuditState) -> None:

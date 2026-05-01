@@ -6,6 +6,28 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.5.1 — strict Ralph loop invariant + Alert.alert hardcoded sweep
+
+### Added
+- **No-soft-stop invariant** in `agents/kiho-ceo.md` — CEO MUST NOT emit
+  「要我繼續嗎」 / "shall I proceed" / "want me to start Turn N" prompts mid-loop;
+  must either iterate or call `AskUserQuestion` or exit with `status: complete`.
+- **`check_soft_stop_drift` audit** in `bin/ceo_behavior_audit.py` — flags
+  `soft_stop_drift` MAJOR when DONE entry lacks `AskUserQuestion` AND
+  `status != complete` AND plan.md Pending was non-empty (or matches the
+  soft-stop regex pattern in the turn summary).
+- **Alert.alert literal regex** in `bin/i18n_audit.py` — extends hardcoded-string
+  detection to catch `Alert.alert("Title", "Body")` patterns. Surfaces 4+ findings
+  on 33Ledger that previously slipped past.
+
+### Closes drift detected on 33Ledger 2026-05-01 Turn 1 — CEO emitted three soft-stop prompts ("要不要繼續", "要我立刻開 Turn 1.5 嗎？", "要我繼續嗎") instead of iterating; plan.md had 5 turns of pending work after Turn 1.
+
+### Migration
+- Existing v6.4 / v6.5.0 sessions: no breaking changes. v6.5.1 audit script will start surfacing `soft_stop_drift` from the next CEO turn that uses the v6.5.1 cache.
+- `claude plugin update kiho` to pull the new cache.
+
+---
+
 ## v6.5.0 — i18n-audit + theme-contrast-guard
 
 ### Added

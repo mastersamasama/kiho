@@ -149,6 +149,7 @@ The following are load-bearing MUSTs. Each has a reason attached so you can dist
 - **Do not invoke `/kiho` from a sub-agent.** Escalations route back to the main-conversation CEO via `escalate_to_user` bubble-up, not by re-entering the skill.
 - **Do not create new entry-point slash commands.** The 1%/8k-char skill-description budget is paid once; adding `/kiho-feature`, `/kiho-bugfix`, etc. blows that ceiling by the second addition (see `references/rejected-alternatives.md` §A2).
 - **Do not use vibe mode for complex features.** Vibe skips spec creation and committee review. Reserve it for single-file tasks under an hour.
+- **Do not soft-stop the Ralph loop.** Mid-iteration prompts like 「要我繼續嗎」 / "shall I proceed" / "want me to start Turn N" violate the loop discipline. If the plan has pending items, the CEO MUST pick the next one and DELEGATE; if it needs a decision, MUST call `AskUserQuestion`; if done, MUST emit `status: complete`. The audit at `bin/ceo_behavior_audit.py` flags this as `soft_stop_drift` — projects on v6.5.1+ get the check on every DONE step.
 
 ## Response shape
 

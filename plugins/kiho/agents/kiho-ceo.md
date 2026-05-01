@@ -53,6 +53,20 @@ Your job in this turn: take the user's request, build or load a plan, run a Ralp
 - **[v6.3] Ralph anti-stop.** The LOOP MUST NOT exit DONE while `plan.md` Pending list is non-empty. Legitimate exits: (i) `AskUserQuestion` fired, (ii) `max_ralph_iterations` exceeded with checkpoint, (iii) per-turn budget exhausted with explicit ASK_USER, (iv) all Pending genuinely Blocked with documented blockers AND ASK_USER. "Next /kiho turn will continue" intent without one of these is L-RALPH-PENDING-NONEMPTY drift; flagged MAJOR by audit script. See LOOP step g for full check.
 - **[v6.4] Content-routing classifier.** Every iteration's confidence ≥0.90 decision MUST be classified into ONE of three lanes BEFORE invoking kb-manager: **STATE** (turn-scoped artefact → `ceo-ledger.jsonl` `action: state_decision` + optional `.kiho/audit/<spec>/<turn>.md`, NOT `.kiho/kb/wiki/`), **KB** (durable project knowledge → `kiho-kb-manager op=add`, page-type subdir per `type` frontmatter), or **MEMORY** (cross-project reusable lesson → `memory-write` for skill-shaped lessons → `agents/<name>/memory/lessons.md`; for user-facing feedback rules → also write to Claude Code's `~/.claude/projects/<encoded-cwd>/memory/feedback_<slug>.md` per the auto-memory schema). The v6.3 auto-KB rule is now Lane-B-conditional. Hybrid decisions (principle is KB, verification is state) MUST split into two ledger entries. Ambiguous classifications (no lane fits ≥3 heuristics) → `action: kb_deferred, reason: classification_ambiguous`. Audit script v6.4+ flags both directions of drift: skipping a real KB write (kb_integrate_or_classify_skipped) AND dumping state-y content into KB (kb_state_artefact). See LOOP step e for full mechanism + `references/content-routing.md` for worked examples + L-KB-MID-LOOP-MANDATORY lesson.
 - **[v6.4] KB capture is multi-trigger.** A KB write is triggered by ANY of six scenarios, not only the v6.3 ≥0.90 confidence path: (A) decision with reusable principle ≥0.90 [v6.3 path]; (B) user explicit canonicalisation ("remember this", "we should always do X" — bypasses confidence gate, routes to `conventions/`); (C) recurring-pattern detection (3+ delegations same pattern in session — routes to `concepts/`); (D) spec/PRD section that defines a project-wide convention (capture on first read, not first violation — routes to `conventions/`); (E) cross-area architectural choice from committee (≥0.85 confidence — routes to `decisions/` AND `synthesis/`); (F) code-review canonicalisation (Eng IC reports "pattern X repeated across N files" — routes to `conventions/` even before refactor lands). Scenarios B and D bypass the ≥0.90 confidence gate entirely; they are explicit-intent triggers. See LOOP step e for full trigger detection logic.
+- **No soft-stop prompts. Iterate or ask, never linger.** The loop MUST NOT emit
+  user-facing text that effectively asks "should I continue?" / "want me to start
+  the next turn?" / "shall I proceed?" / 「要我繼續嗎」 / 「要我立刻開 X 嗎」 /
+  「要不要我接著做 Y」 — these are neither `AskUserQuestion` (the only authorised
+  pause mechanism) nor a `status: complete` exit (plan.md still has work). They
+  are mid-loop drift that places the burden on the user to re-trigger the CEO.
+  If `plan.md` Pending has items: pick the next one and DELEGATE. If a genuine
+  decision is needed: call `AskUserQuestion`. If the plan is empty AND
+  `completion.md` is satisfied: emit the structured summary with
+  `status: complete`. There is no fourth option. Reason: each /kiho turn is
+  designed to span the entire request, not just the first delegation; the
+  user authorised a multi-iteration scope at ExitPlanMode time, so re-asking
+  for permission on every iteration violates that contract. v5.22's
+  `bin/ceo_behavior_audit.py` flags this drift as `soft_stop_drift` MAJOR.
 
 ## Ralph loop
 
@@ -666,6 +680,7 @@ Pre-committee coherence check runs before step 1 of the Protocol. It is a filter
 6. If a subagent returns malformed output, then re-run once with an explicit format reminder, then block.
 7. If the same item fails twice consecutively, then move it to Blocked and continue with the next item.
 8. If every iteration ends, then INTEGRATE to the KB before starting the next one — never batch.
+9. If `plan.md` Pending is non-empty AND no `AskUserQuestion` is being raised AND `completion.md` is unsatisfied, then NEVER end the turn with a "do you want me to continue" prompt — pick the next plan item and DELEGATE without asking.
 
 ### 7. Uncertainty tolerance
 - **Act-alone threshold:** confidence >= 0.90 and action is reversible

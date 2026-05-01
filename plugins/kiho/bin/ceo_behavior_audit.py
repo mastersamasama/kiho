@@ -633,6 +633,131 @@ def check_orphan_state_lessons(state_root: Path, drifts: list[Drift]) -> None:
         )
 
 
+SOFT_STOP_RE = re.compile(
+    r"(要我繼續嗎|要我立刻|要不要我|要我接著|繼續嗎|"
+    r"shall I proceed|want me to|should I (?:continue|start)|continue\?)",
+    re.IGNORECASE,
+)
+
+
+def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
+    """[v6.5.1 — strict Ralph loop invariant]
+
+    Detect soft-stop drift: the CEO ended a turn without `AskUserQuestion` AND
+    without `status: complete` AND `plan.md` Pending was non-empty. Mid-loop
+    "do you want me to continue?" prompts violate the Ralph loop contract — the
+    user authorised a multi-iteration scope at ExitPlanMode time, so re-asking
+    for permission on each iteration places the burden on the user to re-trigger
+    the CEO.
+
+    Audit logic (two complementary signals — either matches → flag MAJOR):
+
+    Signal 1: structural — for each `action: done` (or `turn_summary`) entry,
+      walk back to the prior `tier_declared` / `initialize` boundary; if no
+      `ask_user` action appears in the window AND `payload.status != "complete"`
+      AND `plan.md` currently has non-empty Pending items, flag drift.
+
+    Signal 2: textual — search any `action: turn_summary` payload `summary`
+      field (or `done` payload `narration` / `reason`) for the SOFT_STOP_RE
+      regex (Chinese 「要我繼續嗎」/「要我立刻」/「要不要我」/「要我接著」/
+      「繼續嗎」 + English "shall I proceed" / "want me to" / "should I
+      continue|start" / "continue?"). Any match → flag drift even if
+      structural signal didn't fire (the regex is the fallback when plan.md
+      reconstruction is unreliable).
+    """
+    plan_path = project_root / ".kiho" / "state" / "plan.md"
+    pending_nonempty = False
+    if plan_path.exists():
+        try:
+            plan_text = plan_path.read_text(encoding="utf-8", errors="ignore")
+            pending_lines = []
+            in_pending = False
+            for line in plan_text.splitlines():
+                stripped = line.strip()
+                if (
+                    stripped.startswith("## Pending")
+                    or stripped.startswith("### Pending")
+                    or (
+                        "Pending" in line
+                        and line.startswith(("##", "###"))
+                    )
+                ):
+                    in_pending = True
+                    continue
+                if in_pending and line.startswith(("# ", "## ", "### ")):
+                    in_pending = False
+                    continue
+                if in_pending and stripped.startswith(("|", "-", "*")) and not stripped.startswith("---"):
+                    content = stripped.lstrip("|-* ").strip()
+                    if content and not content.startswith("(") and "id" not in content[:5].lower():
+                        pending_lines.append(content)
+            pending_nonempty = len(pending_lines) > 3
+        except OSError:
+            pass
+
+    # Walk DONE / turn_summary entries
+    for i, entry in enumerate(entries):
+        action = entry.get("action") or ""
+        if action not in ("done", "turn_summary"):
+            continue
+
+        # Signal 2 — textual regex match against turn_summary / done narration.
+        payload = entry.get("payload") or {}
+        text_blobs: list[str] = []
+        for field_name in ("summary", "narration", "reason", "next_action", "turn_outcome"):
+            v = payload.get(field_name)
+            if isinstance(v, str):
+                text_blobs.append(v)
+        # Also fall through to top-level "reason" (some legacy entries flatten it)
+        top_reason = entry.get("reason")
+        if isinstance(top_reason, str):
+            text_blobs.append(top_reason)
+        joined = "\n".join(text_blobs)
+        if joined and SOFT_STOP_RE.search(joined):
+            match = SOFT_STOP_RE.search(joined)
+            drifts.append(
+                Drift(
+                    entry.get("seq"),
+                    "major",
+                    "soft_stop_drift",
+                    "ceo",
+                    f"turn-end narration contains soft-stop prompt: {match.group(0)!r}",
+                    "v6.5.1: CEO MUST iterate, AskUserQuestion, or status:complete — never linger asking for permission",
+                )
+            )
+            continue  # don't double-flag the same entry from signal 1
+
+        # Signal 1 — structural. Only fires when plan.md Pending is non-empty.
+        if not pending_nonempty:
+            continue
+        status = payload.get("status") or ""
+        if status == "complete":
+            continue
+        # Walk back to last tier_declared / initialize for turn start
+        turn_start = 0
+        for j in range(i - 1, -1, -1):
+            a = entries[j].get("action") or ""
+            if a in ("tier_declared", "initialize"):
+                turn_start = j
+                break
+        window = entries[turn_start : i + 1]
+        has_ask_user = any(
+            (w.get("action") or "") == "ask_user" for w in window
+        )
+        if has_ask_user:
+            continue
+        drifts.append(
+            Drift(
+                entry.get("seq"),
+                "major",
+                "soft_stop_drift",
+                "ceo",
+                f"action: {action} with non-empty plan.md Pending, no ask_user in turn, status != complete",
+                "v6.5.1: turn ended without AskUserQuestion AND without status:complete while plan still has pending work — Ralph loop must continue iterating",
+            )
+        )
+
+
 def check_ralph_anti_stop(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
     """[v6.3 — L-RALPH-PENDING-NONEMPTY enforcement]
 
@@ -808,6 +933,11 @@ def main() -> int:
     state_root = project_root / ".kiho" / "state"
     if state_root.exists():
         check_orphan_state_lessons(state_root, drifts)
+
+    # Seventh pass (v6.5.1+): soft-stop drift — CEO ended turn without
+    # AskUserQuestion AND without status:complete while plan.md Pending
+    # was non-empty. See agents/kiho-ceo.md "No soft-stop prompts" invariant.
+    check_soft_stop_drift(collected, project_root, drifts)
 
     summary = summarize(drifts)
 

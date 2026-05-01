@@ -849,6 +849,216 @@ def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[
         )
 
 
+# v6.6.3 — Signal 4: structural INTEGRATE skip in audit MDs.
+# CEO drafts "Lane B (KB) candidate" / "high confidence ≥ 0.90" / "promote to KB"
+# in `.kiho/audit/**/*.md` but never spawns kiho-kb-manager in the same turn.
+# This is the structural twin of soft-stop: listing intent without acting.
+INTEGRATE_CANDIDATE_RE = re.compile(
+    r"(Lane B \(KB\) candidate|Lane B candidate|"
+    r"promote to KB|kb candidate|knowledge candidate|"
+    r"high confidence(?:\s*[≥>=]+\s*0?\.9\d?)?|"
+    r"confidence:\s*0?\.9[0-9]|"
+    r"will be promoted|"
+    r"待\s*evolve\s*固化|"
+    r"下次\s*evolve|"
+    r"待 KB)",
+    re.IGNORECASE,
+)
+
+# Marker the CEO can write next to a candidate to signal it has already been
+# integrated in a prior turn ("[INTEGRATED commit ABCD]"). When present on the
+# same line, that line is excluded from the candidate count.
+INTEGRATED_MARKER_RE = re.compile(r"\[INTEGRATED\b[^\]]*\]", re.IGNORECASE)
+
+# Ledger actions that count as evidence the CEO actually spawned kb-manager
+# (or routed knowledge through an equivalent mechanism) in the same turn.
+KB_INTEGRATE_ACTIONS = {
+    "kb_add",
+    "kb_added",
+    "kb_add_called",
+    "kb_add_batch",
+    "kbm_called",
+    "kb_manager_spawn",
+    "kb-manager-spawn",
+    "knowledge_update_routed",
+}
+
+# Free-form payload / target tokens that also count as kb-manager spawn evidence.
+KB_INTEGRATE_TOKENS = (
+    "kb_add",
+    "kb_added",
+    "kb_add_called",
+    "kb-manager-spawn",
+    "kbm_called",
+    "knowledge_update_routed",
+    "kiho-kb-manager",
+    "kiho:kiho-kb-manager",
+)
+
+
+def _turn_window_start(entries: list[dict]) -> str | None:
+    """Pick the timestamp of the most recent turn boundary, or None if no
+    boundary entries exist. Used to filter audit MD mtimes — files older than
+    the boundary were authored in a prior turn and should not be re-flagged.
+    """
+    for entry in reversed(entries):
+        action = entry.get("action") or ""
+        if action in ("tier_declared", "initialize"):
+            ts = entry.get("ts")
+            if isinstance(ts, str) and ts:
+                return ts
+            return None
+    return None
+
+
+def _ledger_has_kb_integrate(entries: list[dict]) -> bool:
+    """True if any entry in the window evidences a kb-manager spawn or KB
+    capture call. Looks at action names AND payload/target tokens because
+    different code paths log it differently across kiho versions.
+    """
+    for entry in entries:
+        action = entry.get("action") or ""
+        if action in KB_INTEGRATE_ACTIONS:
+            return True
+        target = str(entry.get("target") or "")
+        if target and any(tok in target for tok in KB_INTEGRATE_TOKENS):
+            return True
+        payload = entry.get("payload") or {}
+        try:
+            payload_str = json.dumps(payload, ensure_ascii=False)
+        except (TypeError, ValueError):
+            payload_str = str(payload)
+        if any(tok in payload_str for tok in KB_INTEGRATE_TOKENS):
+            return True
+    return False
+
+
+def check_integrate_drift(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
+    """[v6.6.3 — INTEGRATE skip in audit/state markdown]
+
+    The structural twin of soft-stop drift. v6.4 INTEGRATE rule says decisions
+    with confidence ≥ 0.90 must route through kiho-kb-manager via kb-add
+    mid-loop. CEO had been drafting "Lane B (KB) candidate" lists in audit
+    MDs without ever spawning kb-manager.
+
+    Audit logic:
+      - Glob `<project_root>/.kiho/audit/**/*.md` (and `state/**/*.md` as a
+        secondary surface, since some sessions park candidates there).
+      - For each MD modified after the current turn boundary (or all MDs if
+        the boundary is unknown — fail-loud rather than silently skip),
+        scan body for INTEGRATE_CANDIDATE_RE matches. Skip lines that carry
+        an `[INTEGRATED commit ABCD]` marker (already done, just remembered).
+      - If 0 ledger entries evidence a kb-manager spawn / kb_add_called →
+        every match is MAJOR drift `integrate_skipped`. CRITICAL severity
+        when ≥ 3 candidates skipped in same turn (systemic drift).
+
+    Edge cases:
+      - No audit MDs (fresh project) → no drift possible, silent skip.
+      - No ledger window (caller passed empty list) → cannot evaluate;
+        log structured warning via stderr-free no-op (Drift list unchanged).
+      - MD older than turn boundary → already integrated previously, skip.
+    """
+    audit_root = project_root / ".kiho" / "audit"
+    if not audit_root.exists():
+        return  # fresh project — no drift surface
+    if not entries:
+        return  # cannot evaluate without ledger context
+
+    turn_start_ts = _turn_window_start(entries)
+    # Fall back to file mtime relative to the earliest entry timestamp in window
+    # (best-effort) when no explicit turn boundary is found.
+    fallback_ts = None
+    if turn_start_ts is None:
+        for entry in entries:
+            ts = entry.get("ts")
+            if isinstance(ts, str) and ts:
+                fallback_ts = ts
+                break
+
+    md_files = sorted(audit_root.rglob("*.md"))
+    if not md_files:
+        return
+
+    # Cheap ledger-side check once; if kb-manager was spawned this turn,
+    # every candidate is automatically resolved (no per-file iteration needed).
+    has_integrate = _ledger_has_kb_integrate(entries)
+
+    candidate_hits: list[tuple[Path, str, str]] = []
+    for md in md_files:
+        # Filter out files authored in a prior turn — already integrated then or
+        # never expected to fire here. Use mtime as a cheap proxy for "touched
+        # this turn." Compare ISO timestamps lexicographically (UTC ISO sorts
+        # correctly as strings).
+        try:
+            mtime_iso = (
+                __import__("datetime")
+                .datetime.utcfromtimestamp(md.stat().st_mtime)
+                .strftime("%Y-%m-%dT%H:%M:%SZ")
+            )
+        except OSError:
+            continue
+        threshold = turn_start_ts or fallback_ts
+        if threshold and mtime_iso < threshold:
+            continue
+
+        try:
+            text = md.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            m = INTEGRATE_CANDIDATE_RE.search(line)
+            if m is None:
+                continue
+            # Skip lines explicitly marked as already integrated — the CEO is
+            # just remembering past work, not declaring new candidates.
+            if INTEGRATED_MARKER_RE.search(line):
+                continue
+            # 5-line context (2 above + match + 2 below) for the drift message
+            ctx_start = max(0, i - 2)
+            ctx_end = min(len(lines), i + 3)
+            context = "\n".join(lines[ctx_start:ctx_end])
+            try:
+                rel = md.relative_to(project_root)
+            except ValueError:
+                rel = md
+            candidate_hits.append((md, m.group(0), f"{rel}:{i + 1}\n{context}"))
+
+    if not candidate_hits:
+        return  # nothing drafted this turn
+
+    if has_integrate:
+        return  # CEO did spawn kb-manager — candidates are being processed
+
+    # Severity: MAJOR per match, escalates to CRITICAL when ≥ 3 candidates skipped
+    # in same turn (systemic drift, matches v6.5.2 plan-pending CRITICAL pattern).
+    severity = "critical" if len(candidate_hits) >= 3 else "major"
+    for md_path, matched, ctx in candidate_hits:
+        try:
+            rel = md_path.relative_to(project_root)
+        except ValueError:
+            rel = md_path
+        drifts.append(
+            Drift(
+                seq=None,
+                severity=severity,
+                check="integrate_skipped",
+                declared=str(rel),
+                actual=(
+                    f"audit MD lists KB candidate {matched!r} but turn ledger has "
+                    f"zero kb_add_called / kb-manager-spawn entries. Context:\n{ctx}"
+                ),
+                hint=(
+                    "v6.6.3: drafting a Lane B candidate IS the INTEGRATE step's "
+                    "trigger — same turn must spawn kiho-kb-manager (op=add) or "
+                    "log action: kb_deferred with reason. If session is ending "
+                    "without kb-add, switch to status: max_iterations Route D "
+                    "checkpoint instead of status: complete."
+                ),
+            )
+        )
+
+
 def check_ralph_anti_stop(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
     """[v6.3 — L-RALPH-PENDING-NONEMPTY enforcement]
 
@@ -1029,6 +1239,11 @@ def main() -> int:
     # AskUserQuestion AND without status:complete while plan.md Pending
     # was non-empty. See agents/kiho-ceo.md "No soft-stop prompts" invariant.
     check_soft_stop_drift(collected, project_root, drifts)
+
+    # Eighth pass (v6.6.3+): INTEGRATE skip drift — CEO drafted Lane B (KB)
+    # candidates in audit MDs but never spawned kiho-kb-manager. Structural
+    # twin of soft-stop: listing intent without acting on it.
+    check_integrate_drift(collected, project_root, drifts)
 
     summary = summarize(drifts)
 

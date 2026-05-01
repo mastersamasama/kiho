@@ -6,6 +6,26 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.6.3 — catch silent INTEGRATE skip in audit MDs — 2026-05-02
+
+### Bug fixes
+
+- **Catch silent INTEGRATE skip in audit MDs** — v6.4 says decisions with confidence ≥ 0.90 must route through `kiho-kb-manager` via `kb-add` mid-loop. CEO had been drafting "Lane B (KB) candidate" lists in `.kiho/audit/**/*.md` files without ever spawning kb-manager. Adds `check_integrate_drift` to `ceo_behavior_audit.py` (Signal 4) — scans audit MDs touched in the turn for `INTEGRATE_CANDIDATE_RE` patterns and cross-references against ledger `kb_add_called` entries. MAJOR drift on bare match; CRITICAL when ≥ 3 candidates skipped (systemic drift). `[INTEGRATED commit ABCD]` markers on a candidate line skip that line (already integrated, just remembered).
+- `agents/kiho-ceo.md` — invariant: drafting ≠ INTEGRATE. LOOP step e gains a "Drafting ≠ Integrating" note; DONE step 12 gains a self-audit gate. If audit MD has candidates AND ledger has zero kb-manager spawns → block `status: complete`, switch to Route D `status: max_iterations` checkpoint instead.
+- `skills/kiho/SKILL.md` — anti-pattern row added under the existing soft-stop entries.
+
+Surfaced by 33Ledger 2026-05-02 user audit ("did this provider research finding written in kb or memory?"). Two sessions of audit MDs across 2026-05-01/02 listed multiple Lane B candidates (CV-RUST-FFI-SHELL-PURE, CV-EDIT-VIA-REVERT-APPEND, CV-PNL-OPTIONAL-PROJECTION, CV-VENDOR-DOC-INLINE-CITATION, CV-PROVIDER-WIRE-PROTOCOL-CLASSIFICATION) — 0 of them ever spawned kb-manager. v6.5.2 caught structural soft-stop in `next_action`; v6.6.3 catches the structural twin in audit prose.
+
+### Tests
+
+- `plugins/kiho/tests/test_check_integrate_drift.py` — 5 cases (clean / bare match → MAJOR / 4-candidate systemic → CRITICAL / resolved with `kb_add_called` / `[INTEGRATED ...]` marker suppression). All green.
+
+### Why patch and not minor
+
+Pure addition: no existing audit signal modified, no signature changed. New `check_integrate_drift` runs as the eighth pass in `main()` after `check_soft_stop_drift`; existing checks untouched. Hence patch bump (6.6.2 → 6.6.3).
+
+---
+
 ## v6.6.2 — kiho-researcher: vendor official docs registry + cascade invariant — 2026-05-01
 
 Bug surfaced when an agent reported DeepSeek model "deepseek-v4-flash"

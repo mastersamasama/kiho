@@ -655,24 +655,24 @@ NEXT_ACTION_SOFT_STOP_RE = re.compile(
 )
 
 
-def _has_pending_items(plan_md_path: Path) -> bool | None:
-    """Return True if plan.md has non-empty Pending items, False if empty,
-    None if the file is missing or unreadable (caller treats as "unknown" —
-    do not escalate to CRITICAL on Signal 3).
+def _scan_plan_pending(plan_md_path: Path) -> tuple[int, bool]:
+    """Scan plan.md once and return (pending_count, found).
 
-    Scans for a `## Pending` / `### Pending` header (also tolerates
-    `## In progress` since CEO sometimes labels future-turn items there) and
-    walks subsequent table rows / bullet lines until the next `##`/`###`
-    header. Filters out the markdown table separator + boilerplate header
-    rows ("| id | ..." / "|---|---|"). Returns True if ≥1 substantive row
-    survives the filter.
+    found = False if the file is missing/unreadable (caller treats as
+    "unknown" — do not escalate Signal 3 to CRITICAL). Otherwise found=True
+    and pending_count is the number of substantive Pending items (table rows
+    or bullets, excluding markdown separators and boilerplate "id" header rows).
+
+    Recognises ## Pending / ### Pending headers, plus ## In progress because
+    CEO sometimes parks future-turn items there. Counter resets when the next
+    ##/### header arrives.
     """
     if not plan_md_path.exists():
-        return None
+        return (0, False)
     try:
         text = plan_md_path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return None
+        return (0, False)
     pending_lines: list[str] = []
     in_pending = False
     for line in text.splitlines():
@@ -680,10 +680,7 @@ def _has_pending_items(plan_md_path: Path) -> bool | None:
         if (
             stripped.startswith("## Pending")
             or stripped.startswith("### Pending")
-            or (
-                "Pending" in line
-                and line.startswith(("##", "###"))
-            )
+            or ("Pending" in line and line.startswith(("##", "###")))
         ):
             in_pending = True
             continue
@@ -694,7 +691,7 @@ def _has_pending_items(plan_md_path: Path) -> bool | None:
             content = stripped.lstrip("|-* ").strip()
             if content and not content.startswith("(") and "id" not in content[:5].lower():
                 pending_lines.append(content)
-    return len(pending_lines) > 0
+    return (len(pending_lines), True)
 
 
 def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
@@ -731,39 +728,12 @@ def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[
       the loop should have iterated, not handed off to a future invocation).
     """
     plan_path = project_root / ".kiho" / "state" / "plan.md"
-    pending_signal1 = _has_pending_items(plan_path)
-    # Signal 1 needs a stricter "non-empty enough to fire" test (the v6.5.1
-    # threshold was len > 3 to ignore boilerplate header rows). Keep that
-    # behaviour for backwards compat by re-deriving from the same scan.
-    pending_nonempty = False
-    pending_present_for_signal3 = pending_signal1 is True
-    if plan_path.exists():
-        try:
-            plan_text = plan_path.read_text(encoding="utf-8", errors="ignore")
-            pending_lines = []
-            in_pending = False
-            for line in plan_text.splitlines():
-                stripped = line.strip()
-                if (
-                    stripped.startswith("## Pending")
-                    or stripped.startswith("### Pending")
-                    or (
-                        "Pending" in line
-                        and line.startswith(("##", "###"))
-                    )
-                ):
-                    in_pending = True
-                    continue
-                if in_pending and line.startswith(("# ", "## ", "### ")):
-                    in_pending = False
-                    continue
-                if in_pending and stripped.startswith(("|", "-", "*")) and not stripped.startswith("---"):
-                    content = stripped.lstrip("|-* ").strip()
-                    if content and not content.startswith("(") and "id" not in content[:5].lower():
-                        pending_lines.append(content)
-            pending_nonempty = len(pending_lines) > 3
-        except OSError:
-            pass
+    pending_count, plan_found = _scan_plan_pending(plan_path)
+    # Signal 3 fires CRITICAL when plan.md exists AND has any pending item.
+    # Signal 1 keeps v6.5.1's stricter ">3" threshold to ignore boilerplate
+    # header rows that may slip through the filter on edge-case formats.
+    pending_present_for_signal3 = plan_found and pending_count > 0
+    pending_nonempty = pending_count > 3
 
     # Walk DONE / turn_summary entries
     for i, entry in enumerate(entries):

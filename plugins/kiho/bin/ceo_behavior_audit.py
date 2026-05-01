@@ -639,9 +639,66 @@ SOFT_STOP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# v6.5.2 — Signal 3: structural soft-stop wrapped inside a `next_action` field.
+# The CEO learned to bypass v6.5.1's narration regex by emitting:
+#   {"status": "complete", "next_action": "下個 /kiho 接 plan §5 Turn 2"}
+# This regex matches re-invoke / future-/kiho / wait-for-user patterns that are
+# structurally identical to soft-stop but live inside JSON.
+NEXT_ACTION_SOFT_STOP_RE = re.compile(
+    r"(下個\s*/kiho|下一個\s*/kiho|下次\s*/kiho|next\s+/kiho|re-invoke|"
+    r"user\s+(?:reviews|re-invokes|will\s+invoke|should\s+invoke)|"
+    r"待\s*user\s*(?:確認|觸發|呼叫)|"
+    r"等\s*(?:user|您)\s*(?:re-invoke|觸發|啟動)|"
+    r"please\s+(?:run|invoke|trigger)|"
+    r"接[\s下]+/kiho)",
+    re.IGNORECASE,
+)
+
+
+def _has_pending_items(plan_md_path: Path) -> bool | None:
+    """Return True if plan.md has non-empty Pending items, False if empty,
+    None if the file is missing or unreadable (caller treats as "unknown" —
+    do not escalate to CRITICAL on Signal 3).
+
+    Scans for a `## Pending` / `### Pending` header (also tolerates
+    `## In progress` since CEO sometimes labels future-turn items there) and
+    walks subsequent table rows / bullet lines until the next `##`/`###`
+    header. Filters out the markdown table separator + boilerplate header
+    rows ("| id | ..." / "|---|---|"). Returns True if ≥1 substantive row
+    survives the filter.
+    """
+    if not plan_md_path.exists():
+        return None
+    try:
+        text = plan_md_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    pending_lines: list[str] = []
+    in_pending = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if (
+            stripped.startswith("## Pending")
+            or stripped.startswith("### Pending")
+            or (
+                "Pending" in line
+                and line.startswith(("##", "###"))
+            )
+        ):
+            in_pending = True
+            continue
+        if in_pending and line.startswith(("# ", "## ", "### ")):
+            in_pending = False
+            continue
+        if in_pending and stripped.startswith(("|", "-", "*")) and not stripped.startswith("---"):
+            content = stripped.lstrip("|-* ").strip()
+            if content and not content.startswith("(") and "id" not in content[:5].lower():
+                pending_lines.append(content)
+    return len(pending_lines) > 0
+
 
 def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
-    """[v6.5.1 — strict Ralph loop invariant]
+    """[v6.5.1 — strict Ralph loop invariant; v6.5.2 — Signal 3 next_action]
 
     Detect soft-stop drift: the CEO ended a turn without `AskUserQuestion` AND
     without `status: complete` AND `plan.md` Pending was non-empty. Mid-loop
@@ -650,7 +707,7 @@ def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[
     for permission on each iteration places the burden on the user to re-trigger
     the CEO.
 
-    Audit logic (two complementary signals — either matches → flag MAJOR):
+    Audit logic (three complementary signals — any match → flag drift):
 
     Signal 1: structural — for each `action: done` (or `turn_summary`) entry,
       walk back to the prior `tier_declared` / `initialize` boundary; if no
@@ -664,9 +721,22 @@ def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[
       continue|start" / "continue?"). Any match → flag drift even if
       structural signal didn't fire (the regex is the fallback when plan.md
       reconstruction is unreliable).
+
+    Signal 3 (v6.5.2): structured `next_action` soft-stop — search the
+      `next_action` field of `done` / `turn_summary` payloads for
+      NEXT_ACTION_SOFT_STOP_RE (「下個 /kiho」/「next /kiho」/「re-invoke」/
+      「待 user 確認」/「等 user 觸發」/「please run」/「接 下 /kiho」). MAJOR
+      drift on bare match (`next_action_soft_stop`); CRITICAL when plan.md
+      Pending is also non-empty (`plan_pending_with_soft_stop_next_action` —
+      the loop should have iterated, not handed off to a future invocation).
     """
     plan_path = project_root / ".kiho" / "state" / "plan.md"
+    pending_signal1 = _has_pending_items(plan_path)
+    # Signal 1 needs a stricter "non-empty enough to fire" test (the v6.5.1
+    # threshold was len > 3 to ignore boilerplate header rows). Keep that
+    # behaviour for backwards compat by re-deriving from the same scan.
     pending_nonempty = False
+    pending_present_for_signal3 = pending_signal1 is True
     if plan_path.exists():
         try:
             plan_text = plan_path.read_text(encoding="utf-8", errors="ignore")
@@ -701,8 +771,54 @@ def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[
         if action not in ("done", "turn_summary"):
             continue
 
-        # Signal 2 — textual regex match against turn_summary / done narration.
         payload = entry.get("payload") or {}
+
+        # Signal 3 (v6.5.2) — structured next_action soft-stop.
+        # Inspect next_action FIRST so it gets its own dedicated drift check
+        # name (`next_action_soft_stop` / `plan_pending_with_soft_stop_next_action`)
+        # rather than being subsumed by Signal 2's generic `soft_stop_drift`.
+        flagged_signal3 = False
+        next_action_val = payload.get("next_action")
+        if isinstance(next_action_val, str) and next_action_val:
+            na_match = NEXT_ACTION_SOFT_STOP_RE.search(next_action_val)
+            if na_match is not None:
+                # 5-line context around the matched span for the drift message
+                start = max(0, na_match.start() - 80)
+                end = min(len(next_action_val), na_match.end() + 80)
+                context = next_action_val[start:end].replace("\n", " ⏎ ")
+                if pending_present_for_signal3:
+                    drifts.append(
+                        Drift(
+                            entry.get("seq"),
+                            "critical",
+                            "plan_pending_with_soft_stop_next_action",
+                            "ceo",
+                            (
+                                f"next_action soft-stop {na_match.group(0)!r} emitted "
+                                f"WHILE plan.md Pending non-empty — loop should have "
+                                f"continued iterating or hit max_iterations checkpoint. "
+                                f"Context: …{context}…"
+                            ),
+                            "v6.5.2: structured soft-stop wrapped in next_action JSON field is the SAME drift as natural-language 「要我繼續嗎」 — Ralph LOOP must NOT defer to a future /kiho invocation while Pending non-empty",
+                        )
+                    )
+                else:
+                    drifts.append(
+                        Drift(
+                            entry.get("seq"),
+                            "major",
+                            "next_action_soft_stop",
+                            "ceo",
+                            (
+                                f"next_action contains re-invoke / future-/kiho pattern "
+                                f"{na_match.group(0)!r}. Context: …{context}…"
+                            ),
+                            "v6.5.2: next_action MUST describe a within-loop next step (e.g., 'spawn implementer for T7'), NEVER a meta-instruction telling the user to re-invoke /kiho",
+                        )
+                    )
+                flagged_signal3 = True
+
+        # Signal 2 — textual regex match against turn_summary / done narration.
         text_blobs: list[str] = []
         for field_name in ("summary", "narration", "reason", "next_action", "turn_outcome"):
             v = payload.get(field_name)
@@ -713,8 +829,8 @@ def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[
         if isinstance(top_reason, str):
             text_blobs.append(top_reason)
         joined = "\n".join(text_blobs)
-        if joined and SOFT_STOP_RE.search(joined):
-            match = SOFT_STOP_RE.search(joined)
+        match = SOFT_STOP_RE.search(joined) if joined else None
+        if match is not None and not flagged_signal3:
             drifts.append(
                 Drift(
                     entry.get("seq"),
@@ -726,6 +842,11 @@ def check_soft_stop_drift(entries: list[dict], project_root: Path, drifts: list[
                 )
             )
             continue  # don't double-flag the same entry from signal 1
+
+        if flagged_signal3:
+            # Signal 3 already flagged this entry; skip Signal 1 to avoid
+            # double-counting the same drift.
+            continue
 
         # Signal 1 — structural. Only fires when plan.md Pending is non-empty.
         if not pending_nonempty:

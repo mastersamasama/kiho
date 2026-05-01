@@ -6,6 +6,15 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.5.2 — 2026-05-01
+
+### Bug fixes
+- **strict Ralph: catch structural soft-stop in `next_action` field** — v6.5.1's `check_soft_stop_drift` only inspected natural-language narration; this release adds Signal 3 that scans the final structured summary's `next_action` field for "下個 /kiho / next /kiho / re-invoke" patterns and escalates to CRITICAL when plan.md Pending is non-empty. Closes drift first observed on 33Ledger 2026-05-01 (Turn 1.5 multi-provider).
+- `agents/kiho-ceo.md` — invariant explicitly forbids `next_action` strings that defer to a future /kiho invocation; LOOP step g.CHECK COMPLETION clarifies that "Turn N" Pending items count as Pending.
+- `skills/kiho/SKILL.md` — anti-pattern doc updated.
+
+---
+
 ## v6.5.1 — strict Ralph loop invariant + Alert.alert hardcoded sweep
 
 ### Added

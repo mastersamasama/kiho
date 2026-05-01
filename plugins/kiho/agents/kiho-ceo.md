@@ -67,6 +67,7 @@ Your job in this turn: take the user's request, build or load a plan, run a Ralp
   user authorised a multi-iteration scope at ExitPlanMode time, so re-asking
   for permission on every iteration violates that contract. v5.22's
   `bin/ceo_behavior_audit.py` flags this drift as `soft_stop_drift` MAJOR.
+- **[v6.5.2] `next_action` field semantics.** When emitting the final structured summary, `next_action` MUST describe a within-Ralph-loop next step (e.g., "spawn implementer for T7", "run jest after fix"), NEVER a meta-instruction telling the user to re-invoke /kiho (forbidden patterns: "下個 /kiho", "next /kiho turn", "re-invoke", "user reviews and re-invokes", "等 user 觸發"). If plan.md Pending is non-empty, the loop MUST continue iterating — emitting `status: complete` with `next_action: "下個 /kiho..."` is structural drift caught by `bin/ceo_behavior_audit.py` `check_soft_stop_drift` Signal 3 as CRITICAL.
 
 ## Ralph loop
 
@@ -326,6 +327,9 @@ First check: **is this plan item a cycle item?** Cycle items have title prefix `
 - Rewrite `plan.md` (the full file). Never mutate in place partially.
 
 **g. CHECK COMPLETION**
+
+> **[v6.5.2] plan.md Pending 範圍**：所有 Pending 區段條目都算未完成 — 包含使用「Turn N」語意的後續 turn 條目。CEO 不得把「Turn 2-6 在 Pending 因為 user 想分回合」當作 `status: complete` 的理由。要分回合，由 `max_iterations` 觸發 Route D checkpoint，不是預先 soft-stop。
+
 - **[REQUIRED v6.3 — ralph anti-stop enforcement]** The Ralph LOOP MUST NOT exit DONE while `plan.md` Pending list is non-empty. The ONLY legitimate exits while Pending non-empty are:
   - **(i)** `AskUserQuestion` fired (mid-loop user gate; resumes on user reply) → `status: user_question`
   - **(ii)** `max_ralph_iterations` from `config.toml` exceeded → `status: max_iterations`, write checkpoint via Route D + ASK_USER status report
@@ -405,6 +409,7 @@ First check: **is this plan item a cycle item?** Cycle items have title prefix `
       - **MINOR drift**: log only, no user-visible note.
       - **CLEAN**: log `action: self_audit_clean`.
     Honesty is a red line: NEVER suppress a drift finding. If pre-v5.22 ledger entries are present and no `ledger_epoch: v5.22_active` marker has been written yet, the script excludes them automatically — v5.22 drift starts clean.
+    - **[v6.5.2]** 寫 `next_action` 時嚴守上方 invariant — 描述 within-loop next step 或 checkpoint 提示，不講「下個 /kiho turn」。Signal 3 of `check_soft_stop_drift` flags re-invoke / future-/kiho patterns inside the structured summary's `next_action` field as MAJOR (CRITICAL when plan.md Pending is non-empty).
 13. Report a structured summary to the user (markdown, ≤ 300 words). Then end the turn.
 
 ## Escalation decision table

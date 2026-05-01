@@ -25,7 +25,7 @@ HERE = Path(__file__).resolve().parent
 BIN_DIR = HERE.parent / "bin"
 sys.path.insert(0, str(BIN_DIR))
 
-import i18n_audit  # noqa: E402 — path injection above
+import i18n_audit  # type: ignore[import-not-found]  # noqa: E402 — sys.path injected above
 
 
 def _run_check(

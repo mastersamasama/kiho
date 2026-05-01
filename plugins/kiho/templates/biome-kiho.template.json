@@ -1,0 +1,61 @@
+{
+  "//": "kiho theme-contrast-guard — Biome v2 sidecar config (Layer 2)",
+  "//1": "Drop into project root as `biome.json` OR merge the `plugins` and",
+  "//2": "`overrides` blocks into your existing Biome config.",
+  "//3": "",
+  "//4": "Loads three GritQL plugin files from",
+  "//5": "  templates/grit/no-literal-theme-import.grit",
+  "//6": "  templates/grit/no-color-scheme-in-app.grit",
+  "//7": "  templates/grit/no-hex-in-jsx-style.grit",
+  "//8": "Copy those .grit files into `<project>/.biome/kiho/` and update the",
+  "//9": "paths below if you place them elsewhere.",
+  "//10": "",
+  "//11": "Biome plugin API status (2026-05-01): GritQL diagnostic-only plugins",
+  "//12": "are stable in v2.0+. No autofix yet. See",
+  "//13": "references/lint-sidecar-research-2026-05-01.md for the full survey.",
+  "//14": "",
+  "//15": "Migration: start as the linter default severity for each rule (warn",
+  "//16": "in the .grit file), tighten to error after Phase 2 codemod.",
+
+  "$schema": "https://biomejs.dev/schemas/2.4.0/schema.json",
+
+  "plugins": [
+    "./.biome/kiho/no-literal-theme-import.grit",
+    "./.biome/kiho/no-color-scheme-in-app.grit",
+    "./.biome/kiho/no-hex-in-jsx-style.grit"
+  ],
+
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+
+  "overrides": [
+    {
+      "//": "Theme module + chart-library wrappers are allowed to import",
+      "//1": "literal palettes and use useColorScheme() directly. Disable",
+      "//2": "the kiho plugins for these subtrees.",
+      "include": [
+        "**/theme/**",
+        "**/charts/**"
+      ],
+      "linter": {
+        "enabled": false
+      }
+    },
+    {
+      "//": "Tests may contain hex literals in fixtures.",
+      "include": [
+        "**/__tests__/**",
+        "**/*.test.{ts,tsx}",
+        "**/*.spec.{ts,tsx}",
+        "**/*.fixture.{ts,tsx}"
+      ],
+      "linter": {
+        "enabled": false
+      }
+    }
+  ]
+}

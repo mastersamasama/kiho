@@ -1,0 +1,67 @@
+{
+  "//": "kiho theme-contrast-guard — Oxlint sidecar config (Layer 2)",
+  "//1": "Drop into project root as `.oxlintrc.json` OR merge the `jsPlugins`",
+  "//2": "and `rules` blocks into your existing Oxlint config.",
+  "//3": "",
+  "//4": "Oxlint plugin API status (2026-05-01): JS plugins are in ALPHA per",
+  "//5": "https://oxc.rs/docs/guide/usage/linter/js-plugins. The runtime API is",
+  "//6": "ESLint v9-compatible — `eslint-plugin-kiho` (when published) loads",
+  "//7": "directly via `jsPlugins`. Until then, use the grep-fallback script",
+  "//8": "(`templates/lint-fallback-grep.{sh,ps1}`) in CI.",
+  "//9": "",
+  "//10": "Local dev (against checked-out kiho-plugin):",
+  "//11": "  pnpm add -D file:../kiho-plugin/eslint-plugin-kiho",
+  "//12": "  # then change jsPlugins below from npm-name to './node_modules/eslint-plugin-kiho'",
+  "//13": "",
+  "//14": "Migration: warn-only during Phase 2; tighten to error after sweep.",
+
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+
+  "jsPlugins": [
+    "eslint-plugin-kiho"
+  ],
+
+  "rules": {
+    "kiho/no-literal-theme-import": ["warn", {
+      "forbidden": ["palette", "macaron", "acColors"],
+      "//": "Per-rule path scoping uses the same allowedPaths option as the ESLint version.",
+      "allowedPaths": [
+        "**/theme/**",
+        "**/charts/**",
+        "**/__tests__/**",
+        "**/*.fixture.{ts,tsx}"
+      ]
+    }],
+
+    "kiho/no-color-scheme-in-app": ["warn", {
+      "allowedPaths": [
+        "**/theme/ThemeProvider.{ts,tsx}",
+        "**/theme/useThemeColor.{ts,tsx}"
+      ]
+    }],
+
+    "kiho/no-hex-in-jsx-style": ["warn", {
+      "//": "Optional project-supplied hex -> token mapping for autofix. Oxlint",
+      "//1": "supports ESLint-style fixers via context.report({ fix }), so this",
+      "//2": "carries over from the ESLint template once eslint-plugin-kiho ships.",
+      "mapping": null
+    }]
+  },
+
+  "overrides": [
+    {
+      "files": ["**/__tests__/**", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
+      "rules": {
+        "kiho/no-hex-in-jsx-style": "off",
+        "kiho/no-literal-theme-import": "off"
+      }
+    },
+    {
+      "files": ["**/theme/**/*.{ts,tsx}"],
+      "rules": {
+        "kiho/no-literal-theme-import": "off",
+        "kiho/no-color-scheme-in-app": "off"
+      }
+    }
+  ]
+}

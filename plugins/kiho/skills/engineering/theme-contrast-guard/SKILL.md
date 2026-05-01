@@ -40,7 +40,7 @@ The skill is one piece in a 4-layer stack. Each layer catches what the others mi
 | # | Layer | Fires at | Catches | Misses |
 |---|---|---|---|---|
 | 1 | **Design-time pair matrix** (`bin/contrast_audit.py`) | PR diff touches `theme/tokens.ts` or `tokens.contract.ts` | All static fg×bg combinations per theme bundle below threshold | Dynamic colour composition; runtime tints; ad-hoc hex in JSX |
-| 2 | **Lint-time ESLint sidecar** | IDE save / pre-commit | Inline hex/rgba in `style={...}`; `palette.*` / `macaron.*` literal imports outside `theme/`; `useColorScheme()` outside `ThemeProvider.tsx` | Tokens that ARE in theme but pair-up to low contrast |
+| 2 | **Lint-time sidecar (ESLint / Biome / Oxlint / grep-fallback)** | IDE save / pre-commit / CI | Inline hex/rgba in `style={...}`; `palette.*` / `macaron.*` literal imports outside `theme/`; `useColorScheme()` outside `ThemeProvider.tsx` | Tokens that ARE in theme but pair-up to low contrast |
 | 3 | **Runtime dev warner** (`runtime-contrast-warner.template.ts`) | `__DEV__` render of `<Text>` | Dynamic `<Text>` colour against nearest non-transparent bg ancestor below 4.5 — including conditional / computed / state-driven colours | Non-text components; backgrounds rendered without nested text |
 | 4 | **CI Playwright/axe** | PR | Real DOM contrast scan in light + dark mode across hero screens; layout-time violations after composition | Layer 1+2+3 should already have caught most; this is final-line backstop |
 
@@ -111,6 +111,17 @@ const { tokens } = useTheme();
 <Text style={{ color: tokens.textMuted, fontSize: 13 }}>{label}</Text>
 ```
 
+**Layer 2 toolchain paths (since v6.6.0).** kiho ships four sidecar templates so users on different toolchains all get coverage of the same three rules (`kiho/no-literal-theme-import`, `kiho/no-color-scheme-in-app`, `kiho/no-hex-in-jsx-style`):
+
+| Path | Template(s) | Maturity | Pick when |
+|---|---|---|---|
+| ESLint plugin | `templates/eslint-kiho-config.template.cjs` | stable API; needs `eslint-plugin-kiho` published | project's primary linter is ESLint |
+| Biome GritQL | `templates/biome-kiho.template.json` + `templates/grit/*.grit` | stable diagnostic-only plugin (Biome v2.0+); no autofix yet | project's primary linter is Biome |
+| Oxlint JS plugin | `templates/oxlint-kiho.template.json` | **alpha** plugin API (Oxlint v1.x); needs `eslint-plugin-kiho` published | project's primary linter is Oxlint and willing to track alpha |
+| grep-fallback | `templates/lint-fallback-grep.sh` + `.ps1` | n/a (regex) | Phase 0/1, mixed toolchains, or `eslint-plugin-kiho` not yet available |
+
+See `references/lint-sidecar-research-2026-05-01.md` for the full research report (Biome GritQL recipes survey, Oxlint alpha-API caveats, three citation sources).
+
 ### Example 3: Layer 3 fires — runtime composition produces low contrast
 
 ```ts
@@ -140,8 +151,12 @@ This catches the case where Layer 1+2+3 all passed in isolation but a downstream
 - `references/migration-playbook.md` — generic Phase 0 → Phase 3 rollout for any /kiho project.
 - Top-level `references/accessibility-doctrine.md` — public-facing doctrine doc; how the 4 layers map to WCAG SCs.
 - `templates/tokens.contract.template.ts` — drop-in TypeScript file projects copy.
-- `templates/eslint-kiho-config.template.cjs` — Layer 2 ESLint sidecar config.
+- `templates/eslint-kiho-config.template.cjs` — Layer 2 ESLint sidecar config (path 1 of 4).
+- `templates/biome-kiho.template.json` + `templates/grit/*.grit` — Layer 2 Biome v2 GritQL sidecar (path 2 of 4, works today).
+- `templates/oxlint-kiho.template.json` — Layer 2 Oxlint sidecar (path 3 of 4, alpha plugin API; needs `eslint-plugin-kiho` published).
+- `templates/lint-fallback-grep.sh` + `templates/lint-fallback-grep.ps1` — Layer 2 toolchain-agnostic stop-gap (path 4 of 4; CI grep, exits 1 on violation).
 - `templates/runtime-contrast-warner.template.ts` — Layer 3 runtime warner.
+- `references/lint-sidecar-research-2026-05-01.md` — survey of Biome / Oxlint custom-rule API maturity backing the four-path design.
 
 ## Invariants
 

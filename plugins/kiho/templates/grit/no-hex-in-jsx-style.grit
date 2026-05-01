@@ -1,0 +1,28 @@
+// kiho/no-hex-in-jsx-style — Biome GritQL plugin
+//
+// Bans literal `#xxx` / `rgb(...)` / `rgba(...)` / `hsl(...)` / `hsla(...)`
+// values inside JSX `style={...}` props. Forces semantic theme tokens.
+//
+// Modeled on Biome's official "No inline style props" + "Ban hardcoded
+// colors" recipes. The two recipes combine: match a JSX `style=$value`
+// attribute, then check `$value` text against the color regex set.
+//
+// Limitation vs. ESLint version: the optional `mapping` autofix
+// (`#1A1A1F` -> `tokens.text`) cannot be ported — Biome's GritQL plugin
+// API is diagnostic-only as of Biome v2.4.x. Diagnostic precision
+// (column-accurate) is preserved.
+//
+// Severity: warn (Phase 2 default).
+
+`style={$value}` where {
+  $value <: contains or {
+    r"#[0-9a-fA-F]{3,8}",
+    r"rgba?\([^)]*\)",
+    r"hsla?\([^)]*\)"
+  } as $hex,
+  register_diagnostic(
+    span = $hex,
+    message = "kiho/no-hex-in-jsx-style: literal color in style prop — replace with a semantic theme token (e.g. tokens.textMuted)",
+    severity = "warn"
+  )
+}

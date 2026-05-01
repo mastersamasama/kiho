@@ -1,0 +1,23 @@
+// kiho/no-literal-theme-import — Biome GritQL plugin
+//
+// Bans `import { palette, macaron, acColors }` outside of `theme/**` and
+// chart-library wrappers. Forces consumers to go through useTheme() /
+// useThemeColor() so Layer 1 (audit) and Layer 3 (runtime warner) see the
+// active theme.
+//
+// Path-scoping: GritQL has no per-pattern allowedPaths. Use the host
+// `biome.json::overrides[].include` block to disable kiho plugins for
+// `**/theme/**` and `**/charts/**` (the template ships this exemption).
+//
+// Severity: warn (Phase 2 starting point). Tighten to error in
+// `biome.json::linter.rules` once the codebase is clean — note that
+// GritQL `severity = "error"` only escalates this specific diagnostic.
+
+`import { $bindings } from $source` where {
+  $bindings <: contains or { `palette`, `macaron`, `acColors` },
+  register_diagnostic(
+    span = $bindings,
+    message = "kiho/no-literal-theme-import: import literal theme palette outside the theme module — funnel through useTheme() / useThemeColor()",
+    severity = "warn"
+  )
+}

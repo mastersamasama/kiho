@@ -1,0 +1,26 @@
+// kiho/no-color-scheme-in-app — Biome GritQL plugin
+//
+// Bans `useColorScheme` import from 'react-native' outside the theme
+// module. KB rule CV-USE-IN-APP-DARK: dark-mode logic must funnel through
+// ThemeProvider so Layer 1 / 3 / 4 see the active theme; ad-hoc
+// useColorScheme() callers evade all three.
+//
+// Allowed callers (exempt via `biome.json::overrides[].include` =
+// ["**/theme/**"]):
+//   - apps/<x>/src/theme/ThemeProvider.{ts,tsx}
+//   - apps/<x>/src/theme/useThemeColor.{ts,tsx}
+//
+// Severity: warn (Phase 2). Tighten to error after Phase 2 sweep.
+//
+// NOTE: this only catches the IMPORT line. A direct `require('react-native').useColorScheme()`
+// call would slip past — but RN projects almost universally use ESM imports,
+// and the grep-fallback covers the require() case as a backstop.
+
+`import { $imports } from "react-native"` where {
+  $imports <: contains `useColorScheme`,
+  register_diagnostic(
+    span = $imports,
+    message = "kiho/no-color-scheme-in-app: useColorScheme outside the theme module — read theme from useTheme() / ThemeProvider",
+    severity = "warn"
+  )
+}

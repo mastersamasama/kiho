@@ -6,6 +6,55 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.6.0 — Lint sidecar multi-tool support (Biome + Oxlint) — 2026-05-01
+
+### Added — Layer 2 sidecar now ships four toolchain paths
+
+The theme-contrast-guard skill (sk-088, introduced in v6.5.0) had a single Layer 2 lint sidecar template — ESLint-only — even though many kiho-using projects use Biome or Oxlint. v6.6.0 closes that gap with a researched, four-path topology.
+
+- **Biome v2 GritQL sidecar (works today, no npm dep):**
+  - `plugins/kiho/templates/biome-kiho.template.json` — host config with `plugins[]` array and `overrides[].include` exemptions for theme/charts/tests.
+  - `plugins/kiho/templates/grit/no-literal-theme-import.grit` — bans `import { palette | macaron | acColors }` outside theme module.
+  - `plugins/kiho/templates/grit/no-color-scheme-in-app.grit` — bans `useColorScheme` import from `'react-native'` outside ThemeProvider.
+  - `plugins/kiho/templates/grit/no-hex-in-jsx-style.grit` — bans literal `#xxx` / `rgb(...)` / `rgba(...)` / `hsl(...)` / `hsla(...)` inside JSX `style={...}` props.
+  - Capability ceiling: diagnostic-only (no autofix) per Biome v2.4.x plugin API. Modeled on Biome's own "No inline style props" + "Ban hardcoded colors" + "No restricted imports" official recipes.
+
+- **Oxlint sidecar (alpha plugin API):**
+  - `plugins/kiho/templates/oxlint-kiho.template.json` — config skeleton referencing future `eslint-plugin-kiho` via `jsPlugins`. Loadable as-is once `eslint-plugin-kiho` is published; alpha API caveat documented inline.
+
+- **grep-fallback (toolchain-agnostic stop-gap, works today):**
+  - `plugins/kiho/templates/lint-fallback-grep.sh` — POSIX bash, three regex patterns, exits 1 with violation list.
+  - `plugins/kiho/templates/lint-fallback-grep.ps1` — Windows PowerShell parity. Same exit semantics.
+
+- **Research report (≥ 3 authoritative citations):**
+  - `plugins/kiho/skills/engineering/theme-contrast-guard/references/lint-sidecar-research-2026-05-01.md` — survey of Biome GritQL plugin maturity, Oxlint JS plugin alpha status, recommended sidecar topology, per-toolchain migration paths. Citations: Biome Linter Plugins docs, Biome v2 announcement blog, Biome GritQL Recipes, Oxlint JS Plugins docs, Oxlint Writing JS Plugins docs.
+
+### Updated
+
+- `plugins/kiho/skills/engineering/theme-contrast-guard/SKILL.md` — Layer 2 row in the 4-layer table now reads "Lint-time sidecar (ESLint / Biome / Oxlint / grep-fallback)". A new "Layer 2 toolchain paths" sub-section documents the per-tool maturity matrix and pick-when guidance. Cross-references list the new templates.
+- `plugins/kiho/skills/engineering/theme-contrast-guard/references/migration-playbook.md` — Phase 2 rewritten as four parallel paths (A: ESLint, B: Biome, C: Oxlint, D: grep-fallback) with concrete inventory commands per tool. Cross-project reuse table extended with v6.6.0 templates.
+
+### Unchanged
+
+- `plugins/kiho/templates/eslint-kiho-config.template.cjs` — preserved as-is. ESLint remains a first-class path.
+- All Layer 1 / Layer 3 / Layer 4 templates and skill definitions unchanged.
+
+### Why a fallback ships alongside the plugins
+
+Three reasons: (a) `eslint-plugin-kiho` is not yet published — without the npm package, ESLint and Oxlint paths have a config but no rules; (b) Phase 0 / Phase 1 of the rollout deliberately defers the plugin install — a CI-side grep gives early signal; (c) heterogeneous monorepos (Biome at root + ESLint in one workspace) need a tool-agnostic backstop. The fallback's README documents that it is a stop-gap and should be removed once the plugin paths mature.
+
+### Closes drift detected on 33Ledger 2026-05-01
+
+Turn 5 cleanup task B identified the gap between the SKILL.md Layer 2 description and the single-tool template inventory. v6.6.0 widens template coverage without changing rule semantics or breaking existing v6.5 ESLint adopters.
+
+### Migration
+
+- v6.5.x ESLint adopters: no action required — the existing template is unchanged.
+- v6.5.x projects on Biome / Oxlint that previously had no sidecar: copy the new template + (Biome only) the three `.grit` files; merge into existing config.
+- All projects: optionally wire the grep-fallback as a non-blocking CI step during Phase 0/1 of rollout.
+
+---
+
 ## v6.5.2 — 2026-05-01
 
 ### Bug fixes

@@ -54,35 +54,102 @@ Steps:
 
 ## Phase 2 — Layer 2 lint roll-out (1 week)
 
-**Goal:** ESLint sidecar enforces no inline hex / no `palette.*` literal imports / no `useColorScheme` outside the theme module. Codemod handles the bulk of the existing violations.
+**Goal:** Layer 2 sidecar enforces no inline hex / no `palette.*` literal imports / no `useColorScheme` outside the theme module. Codemod handles the bulk of the existing violations.
 
-Steps:
+Since v6.6.0, kiho ships four toolchain paths — pick the one that matches your project (or run grep-fallback while the chosen plugin matures). The three rules are identical across paths; only the host integration differs.
 
-1. **Drop in the ESLint sidecar** from `templates/eslint-kiho-config.template.cjs`. Set all three rules to `warn` initially.
-2. **Inventory the violations:**
-   ```bash
-   pnpm eslint . --rule 'kiho/no-literal-theme-import:error' \
-                  --rule 'kiho/no-color-scheme-in-app:error' \
-                  --rule 'kiho/no-hex-in-jsx-style:error' \
-                  --no-eslintrc --rulesdir kiho-plugin/eslint-rules \
-                  | tee eslint-baseline.txt
-   ```
-3. **Codemod the high-frequency mappings.** Most projects find that 50-70% of violations match a small set of mappings:
-   ```
-   palette.text     → tokens.text
-   palette.muted    → tokens.textMuted
-   macaron.cream    → tokens.bg
-   macaron.paperWhite → tokens.surface
-   ```
-   A `jscodeshift` script with these four rules typically clears the long tail in one pass.
-4. **Manual sweep** for residue: category-specific tints, chart-library palette overrides, `useColorScheme` callers. Budget 3-4 small PRs.
-5. **Grandfather list.** Files that should never lint:
-   - `theme/tokens.ts` — the token source itself
-   - `theme/ThemeProvider.tsx` — the only legal `useColorScheme()` caller
-   - `__tests__/` and `e2e/fixtures/` — test data may contain hex literals
-6. **Flip to `error`** in CI once the codebase is clean. IDE remains `warn` (lower friction).
+### Step 1 — Drop in the sidecar (pick ONE path per repo)
 
-**Exit criteria:** `pnpm lint` exits 0; no grandfather-list violations.
+#### Path A — ESLint (current ecosystem default; needs `eslint-plugin-kiho` published)
+
+```bash
+# Copy the config template
+cp .kiho-plugin/plugins/kiho/templates/eslint-kiho-config.template.cjs ./.eslintrc.cjs
+pnpm add -D eslint-plugin-kiho   # when published; until then, run Path D in parallel
+```
+
+Inventory:
+```bash
+pnpm eslint . --rule 'kiho/no-literal-theme-import:error' \
+              --rule 'kiho/no-color-scheme-in-app:error' \
+              --rule 'kiho/no-hex-in-jsx-style:error' \
+              | tee eslint-baseline.txt
+```
+
+#### Path B — Biome v2 (works today; no npm dep)
+
+```bash
+# Copy GritQL plugin files
+mkdir -p .biome/kiho
+cp .kiho-plugin/plugins/kiho/templates/grit/*.grit .biome/kiho/
+
+# Merge plugins[] block from biome-kiho.template.json into your biome.json
+# (or use it as the starting point if you have no biome.json yet)
+```
+
+Inventory:
+```bash
+pnpm biome lint . | tee biome-baseline.txt
+```
+
+Caveat: GritQL plugin API is diagnostic-only as of Biome v2.4.x — no autofix. Plan a manual codemod pass.
+
+#### Path C — Oxlint (alpha plugin API; needs `eslint-plugin-kiho` published)
+
+```bash
+# Copy the config template
+cp .kiho-plugin/plugins/kiho/templates/oxlint-kiho.template.json ./.oxlintrc.json
+pnpm add -D eslint-plugin-kiho   # when published; until then, run Path D in parallel
+```
+
+Inventory:
+```bash
+pnpm oxlint . | tee oxlint-baseline.txt
+```
+
+#### Path D — grep-fallback (toolchain-agnostic stop-gap, works today)
+
+POSIX (Linux / macOS / Git Bash on Windows):
+```bash
+bash .kiho-plugin/plugins/kiho/templates/lint-fallback-grep.sh apps/mobile/src \
+  | tee grep-baseline.txt
+```
+
+Windows native PowerShell:
+```powershell
+pwsh -File .kiho-plugin\plugins\kiho\templates\lint-fallback-grep.ps1 apps\mobile\src `
+  | Tee-Object -FilePath grep-baseline.txt
+```
+
+Use this path:
+- During the Phase 0 / Phase 1 window when no plugin is installed yet.
+- For mixed-toolchain monorepos (one workspace on Biome, another on Oxlint).
+- As a CI-only redundancy backstop alongside any of the above plugin paths.
+
+### Step 2 — Codemod the high-frequency mappings
+
+Most projects find that 50-70% of violations match a small set of mappings:
+```
+palette.text     → tokens.text
+palette.muted    → tokens.textMuted
+macaron.cream    → tokens.bg
+macaron.paperWhite → tokens.surface
+```
+A `jscodeshift` script with these four rules typically clears the long tail in one pass.
+
+### Step 3 — Manual sweep
+Manual sweep for residue: category-specific tints, chart-library palette overrides, `useColorScheme` callers. Budget 3-4 small PRs.
+
+### Step 4 — Grandfather list
+Files that should never lint:
+- `theme/tokens.ts` — the token source itself
+- `theme/ThemeProvider.tsx` — the only legal `useColorScheme()` caller
+- `__tests__/` and `e2e/fixtures/` — test data may contain hex literals
+
+### Step 5 — Flip to `error`
+Flip the rule severities to `error` in CI once the codebase is clean. IDE remains `warn` (lower friction). For Biome the `.grit` file's `severity = "error"` line is what to flip; for Oxlint / ESLint, change `"warn"` to `"error"` in the rule entry.
+
+**Exit criteria:** lint command exits 0 in CI; no grandfather-list violations; the grep-fallback step (if you ran one in parallel) reports zero hits.
 
 ## Phase 3 — Layer 3 hard mode + perf split (1 week)
 
@@ -108,7 +175,10 @@ Steps:
 | `bin/contrast_audit.py` | x | (none — invoke as-is) |
 | `tokens.contract.template.ts` | x (template) | x (filled-in copy in `apps/<x>/src/theme/`) |
 | `runtime-contrast-warner.template.ts` | x (template) | x (filled-in copy in `apps/<x>/src/theme/`) |
-| ESLint plugin code (`eslint-plugin-kiho/rules/*`) | x (separate sprint, not in v6.5) | (none — install + configure) |
+| ESLint plugin code (`eslint-plugin-kiho/rules/*`) | x (separate sprint, not in v6.5/v6.6) | (none — install + configure) |
+| Biome GritQL plugins (`templates/grit/*.grit`) | x (since v6.6.0) | (copy into `.biome/kiho/`) |
+| Oxlint config skeleton (`templates/oxlint-kiho.template.json`) | x (since v6.6.0) | (copy + wait on `eslint-plugin-kiho`) |
+| grep-fallback (`templates/lint-fallback-grep.{sh,ps1}`) | x (since v6.6.0) | (wire into CI as a non-blocking step until plugin paths mature) |
 | Codemod scripts (`jscodeshift`) | (advisory examples only) | x (per-project palette mapping) |
 | GitHub Action wiring | x (template) | x (project's `.github/workflows/`) |
 

@@ -6,6 +6,28 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.6.2 — kiho-researcher: vendor official docs registry + cascade invariant — 2026-05-01
+
+Bug surfaced when an agent reported DeepSeek model "deepseek-v4-flash"
+without a citation; manual verification confirmed it was real but the
+process trust gap is unacceptable. New `references/vendor-official-docs.md`
+maps 8 vendors to authoritative doc roots. kiho-researcher.md cascade
+adds Step 0a/0b/0c invariant: vendor queries MUST hit official docs FIRST,
+verbatim-quote the relevant section, before falling through to web search.
+
+### Changed
+
+- `plugins/kiho/references/vendor-official-docs.md` — new registry covering deepseek, openai, anthropic, google-gemini, moonshot, zhipu, react-native, nativewind. Schema + 90-day re-verification protocol included.
+- `plugins/kiho/agents/kiho-researcher.md` — added "Vendor API invariant" section before the existing 5-step cascade; addition only, no existing rule modified.
+- `plugins/kiho/skills/core/knowledge/research/SKILL.md` — added "Step 0 — Vendor-API routing" before Step 1 KB. Step 0 fetches the registered docs root, captures verbatim quotes, then falls through to the standard cascade. Vendor-API answers without a vendor-doc citation are now a hard violation.
+- `plugins/kiho/tests/vendor_official_docs_fixture.md` — 8 vendor query samples + 1 negative case for manual reviewer scoring (no jest harness; this is Markdown for human eval).
+
+### Why patch and not minor
+
+Pure addition: no existing cascade step removed, no signature changed, no input schema change. The Step 0 short-circuit is gated on the query mentioning a registered vendor — non-vendor queries flow through the unchanged cascade. Hence patch bump (6.6.1 → 6.6.2).
+
+---
+
 ## v6.6.1 — i18n Check 6: per-project glossary clarity heuristic (opt-in) — 2026-05-01
 
 ### Added — Check 6 (clarity heuristic, additive, warn-default)

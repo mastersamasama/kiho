@@ -1,6 +1,6 @@
 {
   "name": "kiho",
-  "version": "6.6.1",
+  "version": "6.6.2",
   "description": "Single-entry multi-agent orchestration harness for Claude Code. A Ralph-style CEO agent runs a per-turn autonomous loop over a project's plan.md, delegating to department leads, committees, and vendored skills; backed by a three-tier storage doctrine (Tier-1 markdown canonical, Tier-2 JSONL/YAML/TOML processing, Tier-3 on-demand sqlite/embeddings), a live org registry and capability matrix, a two-tier Karpathy-style knowledge base gated by a sole kb-manager agent, and a declarative cycle-runner kernel executing TOML lifecycle templates (talent-acquisition, skill-evolution, kb-bootstrap, incident-lifecycle, decision-cycle, value-alignment, research-discovery). v6.1 lands the v5.23 OA-integration roadmap across six committees (see _proposals/v5.23-oa-integration/): declarative approval chains (references/approval-chains.toml) replace per-hook Python — adding a new chain is ≤20 lines of TOML with zero Python edits; unified bin/hooks/pre_write_chain_gate.py subsumes the v5.22 agent.md + kb-wiki hooks and picks up three OKR chains (company / department / individual) with distinct certificates; lightweight-committee variant formalized in committee-rules.md; wildcard memo-send + Tier-1 announcements + shift-handoff re-surface; bin/dashboard.py for regenerable period-rollup dashboards invoked from retrospective; bin/agent_cycle_score.py computes telemetry-derived quantitative scores that feed agent-promote criteria; retrospective gains a mandatory process_friction section + bin/pulse_aggregate.py helper. New core/okr/ skill portfolio (okr-set, okr-checkin, okr-close) with RACI pre-emit gates per level; user-facing primer at references/okr-guide.md. v6.0.0 auto-evolution layer + v5.22 runtime gates + v5.21 cycle-runner kernel remain unchanged. Single user entry point: /kiho. See CLAUDE.md for invariants and CHANGELOG.md for milestone narration.",
   "author": {
     "name": "wky"
@@ -29,6 +29,9 @@
     "v6.5.2",
     "v6.6.0",
     "v6.6.1",
+    "v6.6.2",
+    "vendor-official-docs",
+    "research-cascade-step-0",
     "i18n-glossary-clarity",
     "i18n-check-6",
     "per-project-glossary-opt-in",

@@ -35,6 +35,20 @@ PAYLOAD:
 
 Execute in strict order. Each step has a confidence threshold of **0.80** — stop when met, go to next when not.
 
+### Step 0 — Vendor-API routing (v6.6.2)
+
+Before Step 1, classify the query against `references/vendor-official-docs.md`. If the query mentions any vendor name or topic keyword in that registry (deepseek, openai, anthropic, gemini, moonshot/kimi, zhipu/glm, react-native, nativewind, etc.):
+
+1. Read the vendor's `official_docs_root` from the registry table.
+2. `WebFetch` the root URL to confirm it is reachable and current. If the root is 404 or moved, log a registry-staleness note in the response `NOTES` field.
+3. `WebFetch` (or `WebSearch` constrained with `allowed_domains: [<vendor_domain>]`) for the specific topic in the query.
+4. Capture verbatim quotes from the vendor docs as the primary citation.
+5. **Then** continue with Step 1 (KB) and the rest of the cascade — vendor docs do not replace the cascade, they precede it.
+
+**Why a hard precedence rule:** LLM training data lags real vendor releases by months. DeepSeek / OpenAI / Anthropic ship new model ids and deprecate old ones weekly. Answering a vendor API question from cached training data alone (or from a third-party blog) is the failure mode that produces hallucinated model names, wrong endpoint paths, and stale pricing. NEVER state a model name, endpoint path, rate limit, or price without a citation that traces back to the vendor's own documentation.
+
+If the registry has no entry for the named vendor, fall through to Step 1 normally.
+
 ### Step 1 — KB
 
 Invoke `kiho-kb-manager` with op=`search`:

@@ -6,6 +6,20 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.6.6 — 2026-05-02
+
+### Bug fixes
+
+- **Signal 5 false-positive on draft revisions.** v6.6.5 shipped `check_final_summary_soft_stop()` scanning ALL `final_summary_text` entries in the turn window. In practice the protocol generates a draft, audits it, revises if Signal 5 fires, re-logs a new entry, then emits — and the audit kept flagging the original draft's text even after the revised entry superseded it. Caught immediately in v6.6.5 dogfood (33Ledger 2026-05-02 turn-6: draft contained a verbatim quote of the trigger regex used to describe Signal 5 itself, audit fired CRITICAL on the meta-self-reference, revision could not pass because the original entry was still in the window).
+- Fix: `check_final_summary_soft_stop()` now scans only the LATEST `final_summary_text` entry per turn. Per DONE step 13 protocol there is exactly one emitted summary; intermediate drafts (when CEO revises) are not what ships, so auditing them blocks the protocol's own re-write loop.
+- Self-test 5/5 + pytest 7/7 unchanged (single-entry fixtures still cover the 5 canonical paths). Multi-entry behavior validated by replaying the 33Ledger 2026-05-02 turn-6 ledger: revision now passes.
+
+### Why patch and not minor
+
+Logic correction inside the same Signal 5 contract; no signature change, no new flag, no test count change. Ships under same `final-summary-soft-stop-scan` keyword. Patch bump v6.6.5 → v6.6.6.
+
+---
+
 ## v6.6.5 — 2026-05-02
 
 ### Bug fixes

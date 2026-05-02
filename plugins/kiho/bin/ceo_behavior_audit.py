@@ -1117,10 +1117,23 @@ def check_final_summary_soft_stop(
     pending_count, plan_found = _scan_plan_pending(plan_path)
     pending_nonempty = plan_found and pending_count > 0
 
+    # v6.6.5.1 fix: per DONE step 13 protocol there is exactly ONE
+    # `final_summary_text` per turn — the one emitted to the user. If the CEO
+    # writes a draft, audits, and then revises, the LATEST entry supersedes
+    # earlier drafts. Otherwise re-write loops are blocked by their own draft.
+    # We scan only the most recent final_summary_text entry; the audit's own
+    # job is to validate what actually ships, not intermediate drafts.
+    last_idx: int | None = None
     for i, entry in enumerate(entries):
         action = entry.get("action") or ""
-        if action != "final_summary_text":
-            continue
+        if action == "final_summary_text":
+            last_idx = i
+    if last_idx is None:
+        return
+    indices_to_check = [last_idx]
+
+    for i in indices_to_check:
+        entry = entries[i]
         payload = entry.get("payload") or {}
         text = payload.get("text")
         if not isinstance(text, str) or not text:

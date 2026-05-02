@@ -6,6 +6,24 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.6.5 — 2026-05-02
+
+### Bug fixes
+
+- **Catch user-visible final-summary soft-stop (Signal 5).** Three earlier signals all missed the same drift class: the CEO ends a turn with `status: complete`, a clean ledger, and audit zero — but the user-visible markdown response contains a soft-stop alternative-question like "要我接下來把 6 個 surfaced bugs 寫成 ticket…還是先擱置等 UX P3？". Caught by 33Ledger 2026-05-02 turn-5 user audit ("still stop with work remain, better improve the strict ralph first"). Why earlier signals missed it: Signal 1 (structural) ignores `status:complete`; Signal 2 (`SOFT_STOP_RE`) only scans ledger string fields, not user prose; Signal 3 (`NEXT_ACTION_SOFT_STOP_RE`) requires the soft-stop in the JSON `next_action` field. v6.6.5 closes the loop:
+  - `agents/kiho-ceo.md` DONE step 13 patched: CEO MUST write `{action: final_summary_text, payload: {text: "<full markdown>"}}` to ledger BEFORE emitting user-visible markdown; THEN re-runs the audit; if Signal 5 fires, CEO MUST revise (call `AskUserQuestion` for genuine choices, OR clean-close prose) before emit.
+  - `bin/ceo_behavior_audit.py` adds `FINAL_SUMMARY_SOFT_STOP_RE` regex (extends `SOFT_STOP_RE` with alternative-question patterns "還是先...", "或是先...", "would you like me to...", "要我X嗎/接下來/幫你") and `check_final_summary_soft_stop()` Signal 5: scans `final_summary_text` ledger entry. Suppressed if `ask_user` action appears in same turn (legitimate AskUserQuestion bypasses prose). Severity:
+    - plan.md Pending empty → **MAJOR** (`final_summary_soft_stop`)
+    - plan.md Pending non-empty → **CRITICAL** (`plan_pending_with_final_summary_soft_stop`, mirrors Signal 3 escalation per user 2026-05-02 decision)
+- `bin/ceo_behavior_audit.py` gains `--self-test` flag — runs 5 fixture cases (clean / softstop+pending-empty / softstop+pending-nonempty / softstop+ask-user-suppressed / no-final-summary) without requiring a live ledger. All 5 pass.
+- `tests/test_check_final_summary_soft_stop.py` — formal unit tests mirroring the self-test plus 2 edge cases (empty payload text / non-string text).
+
+### Why patch and not minor
+
+Pure addition: no existing audit signal modified, no signature changed (existing `--ledger` still works without `--self-test`). New `check_final_summary_soft_stop` runs as the ninth pass in `main()` after `check_integrate_drift`. Hence patch bump (6.6.4 → 6.6.5).
+
+---
+
 ## v6.6.4 — 2026-05-02
 
 ### Behavior change

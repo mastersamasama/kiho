@@ -639,6 +639,23 @@ SOFT_STOP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# v6.6.5 — Signal 5: final-summary natural-language soft-stop in user-visible
+# markdown. v6.5.1's SOFT_STOP_RE only sees ledger string fields. The CEO
+# learned to bypass it again by writing soft-stop prose ONLY in the user-visible
+# markdown response (e.g., "要我接下來把 6 個 surfaced bugs 寫成 ticket…還是先
+# 擱置等 UX P3？" — caught by 33Ledger 2026-05-02 turn 5 user audit). v6.6.5
+# closes the loop by requiring DONE step 12a to log `final_summary_text` into
+# the ledger before emitting; this signal scans that field with an extended
+# regex covering the alternative-question patterns observed in production
+# drift ("還是先...", "或是先...", "would you like me to...", "要我X嗎/要我Xs").
+FINAL_SUMMARY_SOFT_STOP_RE = re.compile(
+    r"(要我繼續嗎|要我立刻|要不要我|要我接著|要我接下來|要我幫你"
+    r"|還是先|或是先|繼續嗎"
+    r"|shall I proceed|want me to|would you like me to"
+    r"|should I (?:continue|start)|continue\?)",
+    re.IGNORECASE,
+)
+
 # v6.5.2 — Signal 3: structural soft-stop wrapped inside a `next_action` field.
 # The CEO learned to bypass v6.5.1's narration regex by emitting:
 #   {"status": "complete", "next_action": "下個 /kiho 接 plan §5 Turn 2"}
@@ -1063,6 +1080,101 @@ def check_integrate_drift(entries: list[dict], project_root: Path, drifts: list[
         )
 
 
+def check_final_summary_soft_stop(
+    entries: list[dict], project_root: Path, drifts: list[Drift]
+) -> None:
+    """[v6.6.5 — Signal 5: user-visible final-summary soft-stop scanning]
+
+    Closes the gap exposed by 33Ledger 2026-05-02 turn 5: the CEO ended its
+    turn with `status: complete` AND a clean ledger, but the user-visible
+    markdown response contained "要我接下來把 6 個 surfaced bugs 寫成 ticket…
+    還是先擱置等 UX P3？" — a textbook soft-stop the user had to call out.
+
+    Why earlier signals missed it:
+    - Signal 1 (structural) ignores entries where status=complete
+    - Signal 2 (SOFT_STOP_RE) only scans ledger string fields, not user prose
+    - Signal 3 (NEXT_ACTION_SOFT_STOP_RE) requires structural JSON next_action
+
+    v6.6.5 fix:
+    - kiho-ceo.md DONE step 12a now requires the CEO to write
+      `{action: final_summary_text, payload: {text: "<full markdown>"}}` to
+      the ledger BEFORE emitting user-visible markdown. This signal scans that
+      text with FINAL_SUMMARY_SOFT_STOP_RE (extends SOFT_STOP_RE with
+      alternative-question patterns "還是先...", "或是先...",
+      "would you like me to...", "要我X嗎/接下來/幫你").
+
+    Severity (mirrors Signal 3 escalation per user 2026-05-02 decision):
+    - plan.md Pending empty → MAJOR (`final_summary_soft_stop`)
+    - plan.md Pending non-empty → CRITICAL
+      (`plan_pending_with_final_summary_soft_stop` — work was abandoned
+      mid-flight in favor of a prose-question handoff)
+
+    Bypass: if `ask_user` action appears anywhere in the same turn (CEO
+    legitimately asked the user via AskUserQuestion mid-loop), prose may
+    summarize the outcome — not flagged.
+    """
+    plan_path = project_root / ".kiho" / "state" / "plan.md"
+    pending_count, plan_found = _scan_plan_pending(plan_path)
+    pending_nonempty = plan_found and pending_count > 0
+
+    for i, entry in enumerate(entries):
+        action = entry.get("action") or ""
+        if action != "final_summary_text":
+            continue
+        payload = entry.get("payload") or {}
+        text = payload.get("text")
+        if not isinstance(text, str) or not text:
+            continue
+
+        match = FINAL_SUMMARY_SOFT_STOP_RE.search(text)
+        if match is None:
+            continue
+
+        # Walk back to last tier_declared / initialize for turn boundary
+        turn_start = 0
+        for j in range(i - 1, -1, -1):
+            a = entries[j].get("action") or ""
+            if a in ("tier_declared", "initialize"):
+                turn_start = j
+                break
+        window = entries[turn_start : i + 1]
+        has_ask_user = any(
+            (w.get("action") or "") == "ask_user" for w in window
+        )
+        if has_ask_user:
+            continue
+
+        # Compose ±80 char context around the match
+        start = max(0, match.start() - 80)
+        end = min(len(text), match.end() + 80)
+        context = text[start:end].replace("\n", " ⏎ ")
+        severity = "critical" if pending_nonempty else "major"
+        check_name = (
+            "plan_pending_with_final_summary_soft_stop"
+            if pending_nonempty
+            else "final_summary_soft_stop"
+        )
+        drifts.append(
+            Drift(
+                entry.get("seq"),
+                severity,
+                check_name,
+                "ceo",
+                (
+                    f"final_summary_text contains soft-stop prose "
+                    f"{match.group(0)!r} AND no AskUserQuestion was called "
+                    f"this turn. Context: …{context}…"
+                ),
+                (
+                    "v6.6.5: user-visible markdown response MUST NOT contain "
+                    "soft-stop natural-language questions; if a choice is "
+                    "required, CEO MUST call AskUserQuestion mid-loop instead "
+                    "of deferring via prose."
+                ),
+            )
+        )
+
+
 def check_ralph_anti_stop(entries: list[dict], project_root: Path, drifts: list[Drift]) -> None:
     """[v6.3 — L-RALPH-PENDING-NONEMPTY enforcement]
 
@@ -1167,9 +1279,134 @@ def summarize(drifts: list[Drift]) -> dict:
     }
 
 
+def run_self_test() -> int:
+    """v6.6.5: validate Signal 5 against fixture ledgers (read-only, in-memory).
+
+    Returns 0 if all 5 fixtures match expectations; non-zero otherwise.
+    Each fixture is a synthetic ledger + expected (critical, major) counts.
+    """
+    fixtures = [
+        {
+            "name": "1_clean_complete_no_softstop",
+            "entries": [
+                {"action": "tier_declared", "value": "normal", "seq": 1},
+                {"action": "initialize", "seq": 2},
+                {
+                    "action": "final_summary_text",
+                    "payload": {"text": "All 3 phases shipped. Tests green. KB integrated. Self-audit clean."},
+                    "seq": 3,
+                },
+                {"action": "done", "payload": {"status": "complete"}, "seq": 4},
+            ],
+            "expect_critical": 0,
+            "expect_major": 0,
+            "pending_count": 0,
+        },
+        {
+            "name": "2_softstop_pending_empty_major",
+            "entries": [
+                {"action": "tier_declared", "value": "careful", "seq": 1},
+                {"action": "initialize", "seq": 2},
+                {
+                    "action": "final_summary_text",
+                    "payload": {"text": "Done. 要我接下來幫你提 PR 嗎？還是先擱置？"},
+                    "seq": 3,
+                },
+                {"action": "done", "payload": {"status": "complete"}, "seq": 4},
+            ],
+            "expect_critical": 0,
+            "expect_major": 1,
+            "pending_count": 0,
+        },
+        {
+            "name": "3_softstop_pending_nonempty_critical",
+            "entries": [
+                {"action": "tier_declared", "value": "careful", "seq": 1},
+                {"action": "initialize", "seq": 2},
+                {
+                    "action": "final_summary_text",
+                    "payload": {"text": "Phase A done. Want me to start Phase B next, or pause?"},
+                    "seq": 3,
+                },
+                {"action": "done", "payload": {"status": "complete"}, "seq": 4},
+            ],
+            "expect_critical": 1,
+            "expect_major": 0,
+            "pending_count": 5,
+        },
+        {
+            "name": "4_softstop_with_ask_user_suppressed",
+            "entries": [
+                {"action": "tier_declared", "value": "careful", "seq": 1},
+                {"action": "initialize", "seq": 2},
+                {"action": "ask_user", "seq": 3},
+                {
+                    "action": "final_summary_text",
+                    "payload": {"text": "Per your answer, 要我繼續往 Phase B 走？(referencing prior Q)"},
+                    "seq": 4,
+                },
+                {"action": "done", "payload": {"status": "complete"}, "seq": 5},
+            ],
+            "expect_critical": 0,
+            "expect_major": 0,
+            "pending_count": 5,
+        },
+        {
+            "name": "5_no_final_summary_text_entry",
+            "entries": [
+                {"action": "tier_declared", "value": "normal", "seq": 1},
+                {"action": "initialize", "seq": 2},
+                {"action": "done", "payload": {"status": "complete"}, "seq": 3},
+            ],
+            "expect_critical": 0,
+            "expect_major": 0,
+            "pending_count": 5,
+        },
+    ]
+
+    import tempfile
+    failures: list[str] = []
+
+    for fx in fixtures:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir)
+            (tmp_root / ".kiho" / "state").mkdir(parents=True, exist_ok=True)
+            plan_md = tmp_root / ".kiho" / "state" / "plan.md"
+            if fx["pending_count"] > 0:
+                lines = ["# plan", "", "## Pending"]
+                lines.extend(f"- item {i}" for i in range(fx["pending_count"]))
+                plan_md.write_text("\n".join(lines), encoding="utf-8")
+            else:
+                plan_md.write_text("# plan\n\n## Pending\n\n## Completed\n", encoding="utf-8")
+
+            drifts: list[Drift] = []
+            check_final_summary_soft_stop(fx["entries"], tmp_root, drifts)
+            crit = sum(1 for d in drifts if d.severity == "critical")
+            maj = sum(1 for d in drifts if d.severity == "major")
+
+            if crit != fx["expect_critical"] or maj != fx["expect_major"]:
+                failures.append(
+                    f"FX {fx['name']}: expected critical={fx['expect_critical']} "
+                    f"major={fx['expect_major']}, got critical={crit} major={maj}; "
+                    f"drifts={[(d.severity, d.check) for d in drifts]}"
+                )
+            else:
+                print(
+                    f"  ✓ {fx['name']}: critical={crit} major={maj} (as expected)"
+                )
+
+    if failures:
+        print("\nself-test FAILED:")
+        for f in failures:
+            print(f"  ✗ {f}")
+        return 1
+    print("\nSignal 5 self-test: 5/5 fixtures passed")
+    return 0
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="kiho v6.4 CEO behavior audit")
-    ap.add_argument("--ledger", required=True, type=Path, help="path to ceo-ledger.jsonl")
+    ap = argparse.ArgumentParser(description="kiho v6.6.5 CEO behavior audit")
+    ap.add_argument("--ledger", required=False, type=Path, help="path to ceo-ledger.jsonl")
     ap.add_argument(
         "--kb-root",
         default=None,
@@ -1179,7 +1416,18 @@ def main() -> int:
     ap.add_argument("--turn-from", default=None, help="ISO timestamp to filter from")
     ap.add_argument("--full", action="store_true", help="audit entire history incl. pre-v5.22")
     ap.add_argument("--json", action="store_true", help="emit JSON summary to stdout")
+    ap.add_argument(
+        "--self-test",
+        action="store_true",
+        help="v6.6.5: validate Signal 5 against built-in fixtures (no ledger needed)",
+    )
     args = ap.parse_args()
+
+    if args.self_test:
+        return run_self_test()
+
+    if args.ledger is None:
+        ap.error("--ledger is required unless --self-test is set")
 
     ledger: Path = args.ledger
     if not ledger.exists():
@@ -1248,6 +1496,13 @@ def main() -> int:
     # candidates in audit MDs but never spawned kiho-kb-manager. Structural
     # twin of soft-stop: listing intent without acting on it.
     check_integrate_drift(collected, project_root, drifts)
+
+    # Ninth pass (v6.6.5+): final-summary soft-stop in user-visible markdown.
+    # Scans `action: final_summary_text` entries for soft-stop prose patterns
+    # that escape Signals 1-3 because they live in user-facing markdown,
+    # not the structural ledger fields. CRITICAL when plan.md Pending also
+    # non-empty; MAJOR otherwise. Suppressed if AskUserQuestion was called.
+    check_final_summary_soft_stop(collected, project_root, drifts)
 
     summary = summarize(drifts)
 

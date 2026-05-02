@@ -62,6 +62,29 @@ KNOWN_SUBAGENTS = {
     "Explore",
     "Plan",
     "kiho-ceo",
+    # v6.6.7 — common third-party / builtin specialty agents that the CEO
+    # routinely delegates to during careful-tier work. Adding them here
+    # silences MINOR delegate_target_unknown noise.
+    "backend-architect",
+    "frontend-architect",
+    "security-engineer",
+    "quality-engineer",
+    "system-architect",
+    "performance-engineer",
+    "refactoring-expert",
+    "technical-writer",
+    "root-cause-analyst",
+    "requirements-analyst",
+    "devops-architect",
+    "python-expert",
+    "oki-team:test-coverage-auditor",
+    "oki-team:devil-advocate",
+    "oki-team:judge",
+    "oki-team:tester",
+    "oki-team:implementer",
+    "oki-team:planner",
+    "oki-team:architect",
+    "oki-team:researcher",
     # Department leads and common IC names (pattern, checked below)
 }
 
@@ -168,6 +191,30 @@ def _git_last_author(project_root: Path, wiki_path: Path) -> str | None:
         return None
 
 
+def _resolve_kb_slug(project_root: Path, slug: str) -> Path | None:
+    """v6.6.7 — kb-manager writes to tier subdirectories (decisions/, conventions/,
+    references/, lessons/, archived/). Look in the conventional flat path first
+    for backward compat, then walk known subdirectories. Falls back to a recursive
+    glob if neither matches. Returns the first hit or None.
+    """
+    wiki_root = project_root / ".kiho" / "kb" / "wiki"
+    flat = wiki_root / f"{slug}.md"
+    if flat.exists():
+        return flat
+    for tier in ("decisions", "conventions", "references", "lessons", "archived"):
+        candidate = wiki_root / tier / f"{slug}.md"
+        if candidate.exists():
+            return candidate
+    # Last-ditch glob (handles future tier additions). Bounded — ignores anything
+    # under wiki/drafts/ to avoid resolving staged drafts as canonical entries.
+    if wiki_root.exists():
+        for hit in wiki_root.rglob(f"{slug}.md"):
+            if "drafts" in hit.parts:
+                continue
+            return hit
+    return None
+
+
 def check_kb_add(entry: dict, project_root: Path, drifts: list[Drift]) -> None:
     payload = entry.get("payload") or {}
     entries = payload.get("entries") or payload.get("slugs") or []
@@ -176,15 +223,15 @@ def check_kb_add(entry: dict, project_root: Path, drifts: list[Drift]) -> None:
     for slug in entries:
         if not slug:
             continue
-        wiki_path = project_root / ".kiho" / "kb" / "wiki" / f"{slug}.md"
-        if not wiki_path.exists():
+        wiki_path = _resolve_kb_slug(project_root, str(slug))
+        if wiki_path is None:
             drifts.append(
                 Drift(
                     entry.get("seq"),
                     "major",
                     "kb_add_missing_file",
                     str(slug),
-                    f"{wiki_path} not found",
+                    f"{project_root / '.kiho' / 'kb' / 'wiki'} (and known tier subdirs) — no {slug}.md",
                 )
             )
             continue

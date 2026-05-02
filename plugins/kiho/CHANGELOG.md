@@ -6,6 +6,22 @@ Runtime load-bearing concepts (capability taxonomy, topic vocabulary, trust tier
 
 ---
 
+## v6.6.7 — 2026-05-02
+
+### Bug fixes
+
+- **`check_kb_add` blind to tier subdirectories — false-positive MAJOR.** The audit's `check_kb_add` resolved every kb_add slug via the flat path `wiki/<slug>.md`, but `kiho-kb-manager` writes canonical entries under tier subdirectories: `wiki/decisions/`, `wiki/conventions/`, `wiki/references/`, `wiki/lessons/`, `wiki/archived/`. Result: every legit kb_add ledger entry produced one MAJOR `kb_add_missing_file` per slug despite the file existing on disk. Caught in 33Ledger 2026-05-02 turn-7 (3 false-positive MAJORs blocked the DONE step 13 audit gate after a 3-entry batch INTEGRATE).
+- Fix: introduced `_resolve_kb_slug()` helper that searches in this order — flat `wiki/<slug>.md` (back-compat), then each known tier subdir (`decisions`/`conventions`/`references`/`lessons`/`archived`), then a bounded `rglob` excluding `wiki/drafts/`. `check_kb_add` now calls `_resolve_kb_slug` and only fires `kb_add_missing_file` if no match anywhere.
+
+- **`KNOWN_SUBAGENTS` registry too narrow — MINOR noise on every careful-tier turn.** Common third-party / builtin specialty agents (`backend-architect`, `security-engineer`, `quality-engineer`, `oki-team:test-coverage-auditor`, `oki-team:devil-advocate`, etc.) were absent, so every committee delegation produced a MINOR `delegate_target_unknown`.
+- Fix: extended `KNOWN_SUBAGENTS` with ~20 commonly-used Anthropic-builtin and oki-team agents. Patterns still apply to anything outside the registry — this widens the safe-list, doesn't loosen the check.
+
+### Why patch and not minor
+
+Pure resolver fix + safe-list expansion. No new audit signal, no signature change, no severity model change. Self-test 5/5 + pytest 7/7 unchanged. Patch bump v6.6.6 → v6.6.7.
+
+---
+
 ## v6.6.6 — 2026-05-02
 
 ### Bug fixes
